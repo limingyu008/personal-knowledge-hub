@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "个人 AI 记忆层",
+  "description": "为豆包、通义、DeepSeek 等 Web AI 提供本地优先的个人上下文记忆。",
+  "version": "0.1.0",
+  "action": {
+    "default_title": "打开个人 AI 记忆层"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "index.html"
+  },
+  "permissions": [
+    "activeTab",
+    "sidePanel",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*",
+    "https://www.doubao.com/*",
+    "https://tongyi.aliyun.com/*",
+    "https://chat.deepseek.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.doubao.com/*",
+        "https://tongyi.aliyun.com/*",
+        "https://chat.deepseek.com/*"
+      ],
+      "js": [
+        "content-script.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

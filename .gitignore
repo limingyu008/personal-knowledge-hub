@@ -1,0 +1,73 @@
+# macOS / system
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE / editor
+.idea/
+.vscode/
+*.iml
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Backend runtime data
+backend/data/
+backend/uploads/
+backend/*.db
+backend/*.sqlite
+backend/*.sqlite3
+chromadb/
+chroma/
+
+# Node / Vite
+node_modules/
+frontend/node_modules/
+browser-extension/node_modules/
+frontend/dist/
+browser-extension/dist/
+.npm/
+.cache/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Test / coverage
+coverage/
+playwright-report/
+test-results/
+
+# Temporary files
+.tmp/
+tmp/
+*.tmp
+
+# Private planning docs
+ROADMAP.md

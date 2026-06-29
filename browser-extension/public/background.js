@@ -1,0 +1,12 @@
+chrome.runtime.onInstalled.addListener(() => {
+  if (chrome.sidePanel?.setPanelBehavior) {
+    chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+  }
+});
+
+chrome.action.onClicked.addListener(async (tab) => {
+  if (!tab?.windowId || !chrome.sidePanel?.open) {
+    return;
+  }
+  await chrome.sidePanel.open({ windowId: tab.windowId });
+});
