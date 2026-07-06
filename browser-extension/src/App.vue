@@ -211,7 +211,8 @@ async function generateRemoteContext() {
       method: 'POST',
       body: JSON.stringify({
         question: taskText.value || '请结合我的个人知识库，帮助我完成当前问题。',
-        top_k: 8
+        top_k: 8,
+        tokenLimit: 3200
       })
     });
     remotePrompt.value = result.prompt || '';

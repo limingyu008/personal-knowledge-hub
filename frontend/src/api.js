@@ -110,8 +110,15 @@ export function saveModelConfig(payload) {
       parserMode: payload.parserMode || 'local',
       mineruBaseUrl: payload.mineruBaseUrl || '',
       mineruApiKey: payload.mineruApiKey || '',
+      mineruModel: payload.mineruModel || 'mineru-vl',
+      mineruOnlyMd: payload.mineruOnlyMd !== false,
       retrievalMode: payload.retrievalMode || 'keyword',
+      chromaMode: payload.chromaMode || 'local',
       chromaPath: payload.chromaPath || '',
+      chromaHost: payload.chromaHost || 'localhost',
+      chromaPort: Number(payload.chromaPort || 8000),
+      chromaSsl: Boolean(payload.chromaSsl),
+      chromaApiKey: payload.chromaApiKey || '',
       chromaCollection: payload.chromaCollection || 'personal_knowledge_chunks'
     })
   });

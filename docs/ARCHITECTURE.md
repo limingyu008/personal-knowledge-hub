@@ -109,14 +109,14 @@ Knowledge content -> chunks -> Embedding API -> Chroma
 Question -> Embedding API -> Chroma query -> context prompt
 ```
 
-Chat and Embedding settings are stored separately so different model vendors can be used together.
+Chroma can run in local persistent mode or connect to a standalone HTTP Chroma server. Chat and Embedding settings are stored separately so different model vendors can be used together.
 
 ## 5. Document Parsing
 
 Two parsing modes are supported:
 
 - Local Python parser: `pypdf` and `python-docx`
-- MinerU service parser: external HTTP parsing service
+- MinerU service parser: external HTTP parsing service using `files + model + only_md`, supporting Markdown text/stream responses
 
 The parser mode and MinerU endpoint are configured from the frontend and take effect without restarting the backend.
 

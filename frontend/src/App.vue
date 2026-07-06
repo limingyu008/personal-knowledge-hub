@@ -261,17 +261,77 @@
 
         <section class="panel recall-panel">
           <div class="panel-head">
-            <h2>召回链路</h2>
-            <span>Vector + Graph</span>
+            <h2>调试结果</h2>
+            <span>{{ retrievalDebug.mode || 'keyword' }}</span>
           </div>
-          <article v-for="hit in contextHits" :key="hit.title" class="recall-item">
-            <label>
-              <input type="checkbox" checked />
-              <strong>{{ hit.title }}</strong>
-            </label>
-            <p>{{ hit.reason }}</p>
-            <span>{{ hit.score }}</span>
-          </article>
+          <div class="debug-tabs">
+            <button type="button" :class="{ active: contextDebugTab === 'prompt' }" @click="contextDebugTab = 'prompt'">Prompt 预览</button>
+            <button type="button" :class="{ active: contextDebugTab === 'recall' }" @click="contextDebugTab = 'recall'">召回链路</button>
+          </div>
+
+          <section v-if="contextDebugTab === 'prompt'" class="prompt-debug-view">
+            <div class="debug-summary">
+              <span>tokens {{ tokenEstimate }}</span>
+              <span>Top K {{ retrievalDebug.topK || contextParams.topK }}</span>
+              <span>limit {{ retrievalDebug.tokenLimit || contextParams.tokenLimit }}</span>
+            </div>
+            <pre>{{ contextPreview }}</pre>
+          </section>
+
+          <section v-else class="recall-debug-view">
+            <div class="debug-summary">
+              <span>raw {{ retrievalDebug.rawCount || 0 }}</span>
+              <span>selected {{ retrievalDebug.selectedCount || 0 }}</span>
+              <span>filtered {{ retrievalDebug.filteredCount || 0 }}</span>
+            </div>
+
+            <div v-if="retrievalDebug.errors?.length" class="debug-section">
+              <h3>错误</h3>
+              <article v-for="error in retrievalDebug.errors" :key="error" class="recall-item danger-item">{{ error }}</article>
+            </div>
+
+            <div class="debug-section">
+              <h3>最终进入上下文</h3>
+              <article v-for="item in retrievalDebug.selectedItems" :key="`selected-${item.itemId || item.title}`" class="recall-item selected-recall">
+                <div class="recall-title">
+                  <strong>{{ item.title }}</strong>
+                  <span>{{ formatScore(item.score) }}</span>
+                </div>
+                <p>{{ item.reason || item.reference }}</p>
+                <small>{{ item.reference }}</small>
+                <ul v-if="item.chunks?.length" class="chunk-preview-list">
+                  <li v-for="chunk in item.chunks" :key="`${item.title}-${chunk.chunkIndex}`">
+                    #{{ chunk.chunkIndex ?? '-' }} · {{ formatScore(chunk.score) }} · {{ chunk.preview }}
+                  </li>
+                </ul>
+              </article>
+            </div>
+
+            <div class="debug-section">
+              <h3>原始召回</h3>
+              <article v-for="hit in retrievalDebug.rawHits" :key="`raw-${hit.itemId || hit.title}-${hit.chunkIndex}`" class="recall-item">
+                <div class="recall-title">
+                  <strong>{{ hit.title }}</strong>
+                  <span>{{ formatScore(hit.score) }}</span>
+                </div>
+                <p>{{ hit.reason }}</p>
+                <small v-if="hit.distance !== null && hit.distance !== undefined">distance {{ hit.distance }}</small>
+                <p class="debug-preview">{{ hit.preview }}</p>
+              </article>
+            </div>
+
+            <div class="debug-section">
+              <h3>过滤结果</h3>
+              <article v-if="!retrievalDebug.filteredHits?.length" class="recall-item">暂无过滤项</article>
+              <article v-for="hit in retrievalDebug.filteredHits" :key="`filtered-${hit.itemId || hit.title}-${hit.chunkIndex}-${hit.reason}`" class="recall-item muted-recall">
+                <div class="recall-title">
+                  <strong>{{ hit.title }}</strong>
+                  <span>{{ formatScore(hit.score) }}</span>
+                </div>
+                <p>{{ hit.reason }}</p>
+              </article>
+            </div>
+          </section>
         </section>
       </section>
 
@@ -299,7 +359,26 @@
               <option value="vector">Embedding + Chroma 向量检索</option>
             </select>
           </label>
-          <label>Chroma 存储路径<input v-model="modelConfig.chromaPath" placeholder="默认 backend/data/chroma" /></label>
+          <label>
+            Chroma 模式
+            <select v-model="modelConfig.chromaMode">
+              <option value="local">本地持久化</option>
+              <option value="http">HTTP 服务</option>
+            </select>
+          </label>
+          <label v-if="modelConfig.chromaMode !== 'http'">Chroma 存储路径<input v-model="modelConfig.chromaPath" placeholder="默认 backend/data/chroma" /></label>
+          <div v-else class="config-group compact-config">
+            <h3>Chroma HTTP 服务</h3>
+            <label>Host<input v-model="modelConfig.chromaHost" placeholder="localhost" /></label>
+            <label>Port<input v-model.number="modelConfig.chromaPort" placeholder="8000" /></label>
+            <label>SSL
+              <select v-model="modelConfig.chromaSsl">
+                <option :value="false">false</option>
+                <option :value="true">true</option>
+              </select>
+            </label>
+            <label>API Key<input v-model="modelConfig.chromaApiKey" type="password" placeholder="可选，Chroma Token" /></label>
+          </div>
           <label>Chroma Collection<input v-model="modelConfig.chromaCollection" placeholder="personal_knowledge_chunks" /></label>
           <label>
             文档解析模式
@@ -308,8 +387,15 @@
               <option value="mineru">MinerU 服务解析</option>
             </select>
           </label>
-          <label>MinerU 服务地址<input v-model="modelConfig.mineruBaseUrl" placeholder="http://127.0.0.1:8000" /></label>
-          <label>MinerU API Key<input v-model="modelConfig.mineruApiKey" type="password" placeholder="可选" /></label>
+          <label>MinerU 解析接口地址<input v-model="modelConfig.mineruBaseUrl" placeholder="https://xxx/openapi/v1/ocr/mineru-parser" /></label>
+          <label>MinerU API Key<input v-model="modelConfig.mineruApiKey" type="password" placeholder="Bearer Token，可选" /></label>
+          <label>MinerU Model<input v-model="modelConfig.mineruModel" placeholder="mineru-vl" /></label>
+          <label>MinerU only_md
+            <select v-model="modelConfig.mineruOnlyMd">
+              <option :value="true">true</option>
+              <option :value="false">false</option>
+            </select>
+          </label>
           <button type="button" @click="saveModelSettings">保存配置</button>
           <button class="primary-action" type="button" @click="testModelSettings">测试连接</button>
           <button type="button" @click="rebuildVectors">重建向量索引</button>
@@ -445,6 +531,7 @@ const fileInput = ref(null);
 const knowledgeDialog = ref(null);
 const knowledgeForm = ref(emptyKnowledgeForm());
 const contextParams = ref({ topK: 8, graphDepth: 1, tokenLimit: 3200 });
+const contextDebugTab = ref('recall');
 
 const currentNav = computed(() => navItems.find((item) => item.key === activeView.value));
 
@@ -631,7 +718,20 @@ const fallbackContextHits = [
   { title: '知识图谱抽取策略', reason: '提供实体关系待确认和证据链策略', score: '0.86' },
   { title: '机会雷达产品化路径', reason: '补充个人副业产品化偏好', score: '0.78' }
 ];
+const fallbackRetrievalDebug = {
+  mode: 'keyword',
+  topK: 8,
+  tokenLimit: 3200,
+  rawCount: 3,
+  selectedCount: 3,
+  filteredCount: 0,
+  rawHits: fallbackContextHits.map((hit) => ({ ...hit, preview: hit.reason })),
+  selectedItems: fallbackContextHits.map((hit) => ({ ...hit, reference: '本地知识库', chunks: [] })),
+  filteredHits: [],
+  errors: []
+};
 const contextHits = ref(fallbackContextHits);
+const retrievalDebug = ref(fallbackRetrievalDebug);
 const capabilities = ['Chat 摘要', '标签生成', '实体抽取', '关系抽取', 'Embedding', '上下文压缩'];
 const tips = ['优先维护“当前项目”和“决策”类知识。', '待确认关系过多时会降低上下文可信度。', '建议为浏览器插件增加保存选中文本能力。'];
 const modelConfig = ref({
@@ -647,11 +747,18 @@ const modelConfig = ref({
   embeddingTimeoutSeconds: 45,
   timeoutSeconds: 45,
   retrievalMode: 'keyword',
+  chromaMode: 'local',
   chromaPath: '',
+  chromaHost: 'localhost',
+  chromaPort: 8000,
+  chromaSsl: false,
+  chromaApiKey: '',
   chromaCollection: 'personal_knowledge_chunks',
   parserMode: 'local',
   mineruBaseUrl: '',
-  mineruApiKey: ''
+  mineruApiKey: '',
+  mineruModel: 'mineru-vl',
+  mineruOnlyMd: true
 });
 
 onMounted(async () => {
@@ -858,17 +965,21 @@ async function handleFileSelected(event) {
 async function runContextGeneration() {
   if (!backendOnline.value) {
     contextHits.value = fallbackContextHits;
+    retrievalDebug.value = fallbackRetrievalDebug;
     tokenEstimate.value = '2,186';
     return;
   }
 
   const result = await generateContext({
     question: contextQuestion.value,
-    top_k: contextParams.value.topK
+    top_k: contextParams.value.topK,
+    tokenLimit: contextParams.value.tokenLimit
   });
   contextHits.value = result.hits || fallbackContextHits;
+  retrievalDebug.value = result.debug || fallbackRetrievalDebug;
   tokenEstimate.value = result.tokenEstimate || '0';
   generatedPrompt.value = result.prompt || '';
+  contextDebugTab.value = 'recall';
 }
 
 async function saveModelSettings() {
@@ -897,6 +1008,11 @@ async function rebuildVectors() {
 }
 
 const generatedPrompt = ref('');
+
+function formatScore(score) {
+  const value = Number(score || 0);
+  return value.toFixed(2);
+}
 
 const inspectorTitle = computed(() => {
   if (activeView.value === 'knowledge') return selectedKnowledge.value.title;
