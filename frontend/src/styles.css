@@ -777,7 +777,7 @@ menu {
 
 .debug-tabs {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   margin-bottom: 12px;
 }
@@ -883,4 +883,66 @@ menu {
   margin: 0;
   padding-left: 9px;
   line-height: 1.5;
+}
+
+.vector-debug-view {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.vector-status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.vector-status-card {
+  border: 1px solid rgba(96, 145, 170, 0.26);
+  border-radius: 8px;
+  background: rgba(8, 20, 31, 0.74);
+  padding: 12px;
+  box-shadow: inset 0 -1px 0 rgba(80, 223, 255, 0.12);
+}
+
+.vector-status-card.online {
+  border-color: rgba(75, 232, 169, 0.48);
+}
+
+.vector-status-card span,
+.vector-status-card small {
+  display: block;
+  color: #8ba9bc;
+}
+
+.vector-status-card strong {
+  display: block;
+  color: #e5f4ff;
+  font-size: 24px;
+  margin: 8px 0;
+}
+
+.vector-debug-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.25fr);
+  gap: 12px;
+}
+
+.vector-tool-panel {
+  min-width: 0;
+}
+
+.inline-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.inline-form input,
+.vector-tool-panel textarea {
+  width: 100%;
+}
+
+.compact-summary {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }

@@ -21,5 +21,12 @@ collection = client.get_collection("personal_knowledge_chunks")
 print("集合数量：", collection.count())
 
 # 查询前10条数据（空集合也可能）
-results = collection.get(limit=10)
-print("查询结果：", results)
+results = collection.get(
+    limit=10,
+    include=["embeddings", "documents", "metadatas"]
+)
+# print("查询结果：", results)
+print("ids:", results["ids"])
+print("embedding维度:", len(results["embeddings"][0]))
+print("document预览:", results["documents"][0][:100])
+print("metadata:", results["metadatas"][0])

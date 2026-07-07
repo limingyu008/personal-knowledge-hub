@@ -10,7 +10,16 @@ from pydantic import BaseModel, Field
 from .database import DATA_DIR, get_connection, init_db, parse_json
 from .document_parser import ParseError, SUPPORTED_SUFFIXES, parse_document, split_chunks
 from .logging_config import configure_logging
-from .vector_store import VectorStoreError, delete_item_vectors, enabled as vector_enabled, query_chunks, upsert_chunks
+from .vector_store import (
+    VectorStoreError,
+    collection_count,
+    delete_item_vectors,
+    enabled as vector_enabled,
+    inspect_item_vectors,
+    query_chunks,
+    search_vector_debug,
+    upsert_chunks,
+)
 
 
 log_file = configure_logging()
@@ -61,6 +70,13 @@ class ContextRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     top_k: int = 8
     token_limit: int = Field(default=3200, alias="tokenLimit")
+
+    model_config = {"populate_by_name": True}
+
+
+class VectorSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+    top_k: int = Field(default=5, alias="topK")
 
     model_config = {"populate_by_name": True}
 
@@ -572,6 +588,84 @@ def test_embedding_model():
     except VectorStoreError as exc:
         return {"ok": False, "message": str(exc)}
     return {"ok": True, "message": "Embedding API 连通性正常。"}
+
+
+@app.get("/api/vector/status")
+def vector_status():
+    config = get_model_config()
+    status = {
+        "enabled": vector_enabled(config),
+        "retrievalMode": config.get("retrievalMode"),
+        "chromaMode": config.get("chromaMode"),
+        "host": config.get("chromaHost"),
+        "port": config.get("chromaPort"),
+        "ssl": config.get("chromaSsl"),
+        "collection": config.get("chromaCollection"),
+        "embeddingConfigured": bool(config.get("embeddingBaseUrl") and config.get("embeddingApiKey") and config.get("embeddingModel")),
+        "embeddingModel": config.get("embeddingModel"),
+        "ok": False,
+        "count": 0,
+        "error": "",
+    }
+    if not status["enabled"]:
+        status["error"] = "当前检索模式不是向量检索"
+        return status
+    try:
+        status["count"] = collection_count(config)
+        status["ok"] = True
+    except VectorStoreError as exc:
+        status["error"] = str(exc)
+    return status
+
+
+@app.get("/api/vector/items/{item_key}/chunks")
+def vector_item_chunks(item_key: str):
+    config = get_model_config()
+    resolved = resolve_vector_item_key(item_key)
+    if not resolved:
+        return {"ok": False, "itemKey": item_key, "itemId": None, "chunks": [], "message": "未找到匹配的知识条目"}
+    item_id = resolved["id"]
+    if not vector_enabled(config):
+        return {"ok": False, "itemKey": item_key, "itemId": item_id, "chunks": [], "message": "当前检索模式不是向量检索"}
+    try:
+        chunks = inspect_item_vectors(item_id, config)
+    except VectorStoreError as exc:
+        return {"ok": False, "itemKey": item_key, "itemId": item_id, "chunks": [], "message": str(exc)}
+    return {"ok": True, "itemKey": item_key, "itemId": item_id, "title": resolved["title"], "chunks": chunks}
+
+
+def resolve_vector_item_key(item_key: str):
+    key = (item_key or "").strip()
+    if not key:
+        return None
+    with get_connection() as conn:
+        if key.isdigit():
+            row = conn.execute("SELECT id, title FROM knowledge_items WHERE id = ?", (int(key),)).fetchone()
+            return {"id": row["id"], "title": row["title"]} if row else None
+        pattern = "%{}%".format(key)
+        row = conn.execute(
+            """
+            SELECT id, title FROM knowledge_items
+            WHERE title LIKE ? OR summary LIKE ? OR content LIKE ?
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 1
+            """,
+            (pattern, pattern, pattern),
+        ).fetchone()
+        return {"id": row["id"], "title": row["title"]} if row else None
+
+
+@app.post("/api/vector/search")
+def vector_search(request: VectorSearchRequest):
+    config = get_model_config()
+    if not vector_enabled(config):
+        return {"ok": False, "query": request.query, "topK": request.top_k, "hits": [], "message": "当前检索模式不是向量检索"}
+    try:
+        result = search_vector_debug(request.query, max(1, min(request.top_k, 20)), config)
+    except VectorStoreError as exc:
+        return {"ok": False, "query": request.query, "topK": request.top_k, "hits": [], "message": str(exc)}
+    result["ok"] = True
+    return result
 
 
 @app.post("/api/vector/rebuild")

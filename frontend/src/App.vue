@@ -267,6 +267,7 @@
           <div class="debug-tabs">
             <button type="button" :class="{ active: contextDebugTab === 'prompt' }" @click="contextDebugTab = 'prompt'">Prompt 预览</button>
             <button type="button" :class="{ active: contextDebugTab === 'recall' }" @click="contextDebugTab = 'recall'">召回链路</button>
+            <button type="button" :class="{ active: contextDebugTab === 'vector' }" @click="openVectorDebug">向量调试</button>
           </div>
 
           <section v-if="contextDebugTab === 'prompt'" class="prompt-debug-view">
@@ -278,7 +279,7 @@
             <pre>{{ contextPreview }}</pre>
           </section>
 
-          <section v-else class="recall-debug-view">
+          <section v-else-if="contextDebugTab === 'recall'" class="recall-debug-view">
             <div class="debug-summary">
               <span>raw {{ retrievalDebug.rawCount || 0 }}</span>
               <span>selected {{ retrievalDebug.selectedCount || 0 }}</span>
@@ -330,6 +331,74 @@
                 </div>
                 <p>{{ hit.reason }}</p>
               </article>
+            </div>
+          </section>
+
+          <section v-else class="vector-debug-view">
+            <div class="debug-section">
+              <div class="vector-status-grid">
+                <article class="vector-status-card" :class="{ online: vectorStatus.ok }">
+                  <span>连接状态</span>
+                  <strong>{{ vectorStatus.ok ? 'OK' : '待检查' }}</strong>
+                  <small>{{ vectorStatus.error || vectorStatus.collection || '点击检查状态' }}</small>
+                </article>
+                <article class="vector-status-card">
+                  <span>Collection</span>
+                  <strong>{{ vectorStatus.count ?? 0 }}</strong>
+                  <small>{{ vectorStatus.collection || modelConfig.chromaCollection }}</small>
+                </article>
+                <article class="vector-status-card">
+                  <span>Embedding</span>
+                  <strong>{{ vectorStatus.embeddingConfigured ? 'Ready' : '缺配置' }}</strong>
+                  <small>{{ vectorStatus.embeddingModel || modelConfig.embeddingModel }}</small>
+                </article>
+              </div>
+              <button type="button" @click="loadVectorStatus">检查状态</button>
+            </div>
+
+            <div class="vector-debug-layout">
+              <section class="debug-section vector-tool-panel">
+                <h3>按 item_id 或标题关键词查看 chunk</h3>
+                <div class="inline-form">
+                  <input v-model="vectorItemId" placeholder="例如 22 或 刘通" />
+                  <button type="button" @click="inspectVectorItem">查询</button>
+                </div>
+                <article v-if="vectorItemResult.title" class="recall-item selected-recall">已匹配：{{ vectorItemResult.title }} · item {{ vectorItemResult.itemId }}</article>
+                <article v-if="vectorItemResult.message" class="recall-item danger-item">{{ vectorItemResult.message }}</article>
+                <article v-for="chunk in vectorItemResult.chunks" :key="chunk.id" class="recall-item">
+                  <div class="recall-title">
+                    <strong>{{ chunk.id }}</strong>
+                    <span>dim {{ chunk.embeddingDim }}</span>
+                  </div>
+                  <p>{{ chunk.title }} · #{{ chunk.chunkIndex }}</p>
+                  <small>preview {{ chunk.embeddingPreview?.join(', ') || '-' }}</small>
+                  <p class="debug-preview">{{ chunk.documentPreview }}</p>
+                </article>
+              </section>
+
+              <section class="debug-section vector-tool-panel">
+                <h3>按问题做向量召回</h3>
+                <textarea v-model="vectorSearchForm.query" rows="4" placeholder="输入要测试的检索问题"></textarea>
+                <div class="inline-form">
+                  <input v-model.number="vectorSearchForm.topK" placeholder="TopK" />
+                  <button class="primary-action" type="button" @click="runVectorSearch">召回测试</button>
+                </div>
+                <div class="debug-summary compact-summary">
+                  <span>query dim {{ vectorSearchResult.queryEmbeddingDim || 0 }}</span>
+                  <span>TopK {{ vectorSearchResult.topK || vectorSearchForm.topK }}</span>
+                  <span>hits {{ vectorSearchResult.hits?.length || 0 }}</span>
+                </div>
+                <article v-if="vectorSearchResult.message" class="recall-item danger-item">{{ vectorSearchResult.message }}</article>
+                <article v-for="hit in vectorSearchResult.hits" :key="hit.id" class="recall-item selected-recall">
+                  <div class="recall-title">
+                    <strong>{{ hit.title }}</strong>
+                    <span>{{ formatScore(hit.score) }}</span>
+                  </div>
+                  <p>{{ hit.id }} · item {{ hit.itemId }} · chunk #{{ hit.chunkIndex }}</p>
+                  <small>distance {{ hit.distance }}</small>
+                  <p class="debug-preview">{{ hit.documentPreview }}</p>
+                </article>
+              </section>
             </div>
           </section>
         </section>
@@ -498,12 +567,15 @@ import {
   fetchJobs,
   fetchKnowledgeItems,
   fetchModelConfig,
+  fetchVectorItemChunks,
+  fetchVectorStatus,
   generateContext,
   importFile,
   importManual,
   importWebpage,
   rebuildVectorIndex,
   saveModelConfig,
+  searchVectorDebug,
   testChatModel,
   testEmbeddingModel,
   updateKnowledgeItem
@@ -732,6 +804,11 @@ const fallbackRetrievalDebug = {
 };
 const contextHits = ref(fallbackContextHits);
 const retrievalDebug = ref(fallbackRetrievalDebug);
+const vectorStatus = ref({ ok: false, enabled: false, count: 0, error: '', collection: '', embeddingConfigured: false, embeddingModel: '' });
+const vectorItemId = ref('');
+const vectorItemResult = ref({ ok: false, itemId: '', chunks: [], message: '' });
+const vectorSearchForm = ref({ query: contextQuestion.value, topK: 5 });
+const vectorSearchResult = ref({ ok: false, query: '', topK: 5, queryEmbeddingDim: 0, hits: [], message: '' });
 const capabilities = ['Chat 摘要', '标签生成', '实体抽取', '关系抽取', 'Embedding', '上下文压缩'];
 const tips = ['优先维护“当前项目”和“决策”类知识。', '待确认关系过多时会降低上下文可信度。', '建议为浏览器插件增加保存选中文本能力。'];
 const modelConfig = ref({
@@ -1005,6 +1082,30 @@ async function rebuildVectors() {
   } else {
     tips.unshift(result.message || `向量索引重建失败，失败 ${result.failed?.length || 0} 条。`);
   }
+  await loadVectorStatus();
+}
+
+async function openVectorDebug() {
+  contextDebugTab.value = 'vector';
+  await loadVectorStatus();
+}
+
+async function loadVectorStatus() {
+  if (!backendOnline.value) return;
+  vectorStatus.value = await fetchVectorStatus();
+}
+
+async function inspectVectorItem() {
+  if (!backendOnline.value || !vectorItemId.value) return;
+  vectorItemResult.value = await fetchVectorItemChunks(vectorItemId.value);
+}
+
+async function runVectorSearch() {
+  if (!backendOnline.value || !vectorSearchForm.value.query.trim()) return;
+  vectorSearchResult.value = await searchVectorDebug({
+    query: vectorSearchForm.value.query,
+    topK: Number(vectorSearchForm.value.topK || 5)
+  });
 }
 
 const generatedPrompt = ref('');

@@ -177,6 +177,106 @@ def delete_item_vectors(item_id: int, config: Dict[str, object]):
         logger.warning("删除 Chroma 向量失败，item_id：%s", item_id, exc_info=True)
 
 
+def collection_count(config: Dict[str, object]) -> int:
+    collection = get_collection(config)
+    try:
+        return int(collection.count())
+    except Exception as exc:
+        logger.exception("Chroma count 查询失败")
+        raise VectorStoreError(build_chroma_error_message(exc)) from exc
+
+
+def embedding_preview(embedding, size: int = 5):
+    if embedding is None:
+        return []
+    values = embedding.tolist() if hasattr(embedding, "tolist") else embedding
+    return [round(float(value), 6) for value in values[:size]]
+
+
+def document_preview(document: str, size: int = 260) -> str:
+    clean = " ".join((document or "").split())
+    return clean[:size]
+
+
+def inspect_item_vectors(item_id: int, config: Dict[str, object], limit: int = 100):
+    collection = get_collection(config)
+    try:
+        result = collection.get(
+            where={"item_id": int(item_id)},
+            limit=limit,
+            include=["embeddings", "documents", "metadatas"],
+        )
+    except Exception as exc:
+        logger.exception("Chroma item chunk 查询失败，item_id：%s", item_id)
+        raise VectorStoreError(build_chroma_error_message(exc)) from exc
+
+    ids = result.get("ids") or []
+    documents = result.get("documents") or []
+    metadatas = result.get("metadatas") or []
+    embeddings = result.get("embeddings")
+    if embeddings is None:
+        embeddings = []
+    chunks = []
+    for index, chunk_id in enumerate(ids):
+        document = documents[index] if index < len(documents) else ""
+        metadata = metadatas[index] if index < len(metadatas) else {}
+        embedding = embeddings[index] if index < len(embeddings) else None
+        chunks.append({
+            "id": chunk_id,
+            "itemId": metadata.get("item_id", item_id),
+            "chunkIndex": metadata.get("chunk_index"),
+            "title": metadata.get("title") or "未命名知识",
+            "source": metadata.get("source") or "",
+            "embeddingDim": len(embedding) if embedding is not None else 0,
+            "embeddingPreview": embedding_preview(embedding),
+            "documentPreview": document_preview(document),
+            "metadata": metadata,
+        })
+    return chunks
+
+
+def search_vector_debug(question: str, top_k: int, config: Dict[str, object]):
+    collection = get_collection(config)
+    query_embedding = embed_texts([question], config)[0]
+    try:
+        result = collection.query(
+            query_embeddings=[query_embedding],
+            n_results=top_k,
+            include=["documents", "metadatas", "distances"],
+        )
+    except Exception as exc:
+        logger.exception("Chroma 调试查询失败，top_k：%s", top_k)
+        raise VectorStoreError(build_chroma_error_message(exc)) from exc
+
+    ids = result.get("ids", [[]])[0]
+    documents = result.get("documents", [[]])[0]
+    metadatas = result.get("metadatas", [[]])[0]
+    distances = result.get("distances", [[]])[0]
+    hits = []
+    for index, chunk_id in enumerate(ids):
+        document = documents[index] if index < len(documents) else ""
+        metadata = metadatas[index] if index < len(metadatas) else {}
+        distance = float(distances[index] if index < len(distances) else 1)
+        score = max(0.0, min(0.99, 1 / (1 + distance)))
+        hits.append({
+            "id": chunk_id,
+            "itemId": metadata.get("item_id"),
+            "chunkIndex": metadata.get("chunk_index"),
+            "title": metadata.get("title") or "未命名知识",
+            "source": metadata.get("source") or "",
+            "distance": round(distance, 6),
+            "score": round(score, 4),
+            "documentPreview": document_preview(document),
+            "metadata": metadata,
+        })
+    return {
+        "query": question,
+        "topK": top_k,
+        "queryEmbeddingDim": len(query_embedding),
+        "hits": hits,
+    }
+
+
 def query_chunks(question: str, top_k: int, config: Dict[str, object]):
     collection = get_collection(config)
     query_embedding = embed_texts([question], config)[0]

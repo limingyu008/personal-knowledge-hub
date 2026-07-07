@@ -135,3 +135,18 @@ export function testEmbeddingModel() {
 export function rebuildVectorIndex() {
   return request('/vector/rebuild', { method: 'POST' });
 }
+
+export function fetchVectorStatus() {
+  return request('/vector/status');
+}
+
+export function fetchVectorItemChunks(itemId) {
+  return request(`/vector/items/${encodeURIComponent(itemId)}/chunks`);
+}
+
+export function searchVectorDebug(payload) {
+  return request('/vector/search', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
