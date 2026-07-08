@@ -150,3 +150,19 @@ export function searchVectorDebug(payload) {
     body: JSON.stringify(payload)
   });
 }
+
+export function fetchWikiPages(keyword = '', type = '') {
+  const params = new URLSearchParams();
+  if (keyword) params.set('keyword', keyword);
+  if (type) params.set('type', type);
+  const query = params.toString() ? `?${params.toString()}` : '';
+  return request(`/wiki/pages${query}`);
+}
+
+export function fetchWikiLogs() {
+  return request('/wiki/logs');
+}
+
+export function compileWikiItem(itemId) {
+  return request(`/wiki/compile/${encodeURIComponent(itemId)}`, { method: 'POST' });
+}

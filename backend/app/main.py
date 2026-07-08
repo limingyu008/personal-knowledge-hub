@@ -10,6 +10,8 @@ from pydantic import BaseModel, Field
 from .database import DATA_DIR, get_connection, init_db, parse_json
 from .document_parser import ParseError, SUPPORTED_SUFFIXES, parse_document, split_chunks
 from .logging_config import configure_logging
+from .wiki_compiler import WikiCompileError, compile_knowledge_item_to_wiki
+from .wiki_repository import get_wiki_page, list_compile_logs, list_wiki_pages
 from .vector_store import (
     VectorStoreError,
     collection_count,
@@ -158,6 +160,35 @@ def dashboard():
             {"title": "上下文调试台待接入模型", "desc": "当前返回基于关键词的上下文模拟结果", "time": "MVP"},
         ],
     }
+
+
+@app.get("/api/wiki/pages")
+def wiki_pages(keyword: Optional[str] = None, type: Optional[str] = None):
+    return list_wiki_pages(keyword or "", type or "")
+
+
+@app.get("/api/wiki/pages/{page_id}")
+def wiki_page_detail(page_id: int):
+    page = get_wiki_page(page_id)
+    if not page:
+        raise HTTPException(status_code=404, detail="Wiki page not found")
+    return page
+
+
+@app.get("/api/wiki/logs")
+def wiki_logs():
+    return list_compile_logs()
+
+
+@app.post("/api/wiki/compile/{item_id}")
+def compile_wiki_item(item_id: int):
+    item = get_knowledge_item_for_service(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Knowledge item not found")
+    try:
+        return compile_knowledge_item_to_wiki(item, get_model_config())
+    except WikiCompileError as exc:
+        return {"ok": False, "message": str(exc), "pages": []}
 
 
 @app.get("/api/knowledge-items")
@@ -696,6 +727,18 @@ def rebuild_vector_index():
             failed.append({"id": item["id"], "title": item["title"], "error": str(exc)})
 
     return {"ok": not failed, "indexedChunks": indexed, "failed": failed}
+
+
+def get_knowledge_item_for_service(item_id: int):
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT id, title, summary, content, source, source_url, status, status_type, tags_json, updated_at
+            FROM knowledge_items WHERE id = ?
+            """,
+            (item_id,),
+        ).fetchone()
+    return knowledge_row(row) if row else None
 
 
 def knowledge_row(row):

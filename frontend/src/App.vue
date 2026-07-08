@@ -247,6 +247,70 @@
         </div>
       </section>
 
+      <section v-if="activeView === 'wiki'" class="wiki-layout">
+        <aside class="filter-panel">
+          <h2>Wiki 控制台</h2>
+          <label>
+            页面搜索
+            <input v-model="wikiKeyword" placeholder="标题、标签、正文" @keyup.enter="refreshWiki" />
+          </label>
+          <label>
+            页面类型
+            <select v-model="wikiTypeFilter" @change="refreshWiki">
+              <option value="">全部</option>
+              <option v-for="type in wikiTypes" :key="type" :value="type">{{ type }}</option>
+            </select>
+          </label>
+          <div class="compile-box">
+            <h3>编译知识条目</h3>
+            <input v-model="wikiCompileItemId" placeholder="输入知识 item_id" />
+            <button class="primary-action" type="button" @click="compileSelectedWikiItem">编译为 Wiki</button>
+            <small>{{ wikiCompileMessage || '生成/更新 Markdown Wiki 页面，优先使用 Chat 模型。' }}</small>
+          </div>
+        </aside>
+
+        <section class="wiki-main">
+          <div class="wiki-list">
+            <article
+              v-for="page in wikiPages"
+              :key="page.id"
+              class="wiki-card"
+              :class="{ active: selectedWikiPage?.id === page.id }"
+              @click="selectedWikiPage = page"
+            >
+              <div class="recall-title">
+                <strong>{{ page.title }}</strong>
+                <span>{{ page.type }}</span>
+              </div>
+              <p>{{ page.contentMd.slice(0, 150) }}</p>
+              <small>{{ page.slug }} · {{ page.updatedAt }}</small>
+            </article>
+            <article v-if="!wikiPages.length" class="wiki-card">暂无 Wiki 页面，先输入知识 item_id 编译一条。</article>
+          </div>
+
+          <article class="panel wiki-reader">
+            <div class="panel-head">
+              <h2>{{ selectedWikiPage?.title || 'Wiki 页面预览' }}</h2>
+              <span>{{ selectedWikiPage?.type || 'markdown' }}</span>
+            </div>
+            <pre>{{ selectedWikiPage?.contentMd || '编译后的 Markdown Wiki 会显示在这里。' }}</pre>
+          </article>
+        </section>
+
+        <aside class="wiki-log-panel">
+          <h2>编译日志</h2>
+          <article v-for="log in wikiLogs" :key="log.id" class="recall-item">
+            <div class="recall-title">
+              <strong>{{ log.status }}</strong>
+              <span>#{{ log.knowledgeItemId }}</span>
+            </div>
+            <p>{{ log.title }}</p>
+            <small>{{ log.message }} · {{ log.createdAt }}</small>
+          </article>
+          <article v-if="!wikiLogs.length" class="recall-item">暂无编译日志</article>
+        </aside>
+      </section>
+
       <section v-if="activeView === 'context'" class="context-grid">
         <section class="panel prompt-panel">
           <h2>当前问题</h2>
@@ -569,10 +633,13 @@ import {
   fetchModelConfig,
   fetchVectorItemChunks,
   fetchVectorStatus,
+  fetchWikiLogs,
+  fetchWikiPages,
   generateContext,
   importFile,
   importManual,
   importWebpage,
+  compileWikiItem,
   rebuildVectorIndex,
   saveModelConfig,
   searchVectorDebug,
@@ -587,6 +654,7 @@ const navItems = [
   { key: 'import', label: '导入知识', subtitle: '文件、网页和手动笔记入口', icon: '↥' },
   { key: 'jobs', label: '加工队列', subtitle: '解析、抽取和向量化流水线', icon: '⚙' },
   { key: 'graph', label: '知识图谱', subtitle: '实体、关系和证据网络', icon: '◎' },
+  { key: 'wiki', label: 'Wiki 编译', subtitle: 'Markdown Wiki 页面和编译日志', icon: '▧' },
   { key: 'context', label: '上下文调试台', subtitle: '检索链路和 Prompt 控制台', icon: '▤' },
   { key: 'models', label: '模型配置', subtitle: 'OpenAI 兼容 API 设置', icon: '◇' },
   { key: 'settings', label: '系统设置', subtitle: '本地存储与安全策略', icon: '◌' }
@@ -680,6 +748,14 @@ const pipeline = ref(fallbackPipeline);
 const activities = ref(fallbackActivities);
 const knowledgeItems = ref(fallbackKnowledgeItems);
 const selectedKnowledge = ref(fallbackKnowledgeItems[0]);
+const wikiTypes = ['summary', 'person', 'project', 'concept', 'decision', 'risk', 'index', 'log'];
+const wikiKeyword = ref('');
+const wikiTypeFilter = ref('');
+const wikiCompileItemId = ref('');
+const wikiCompileMessage = ref('');
+const wikiPages = ref([]);
+const selectedWikiPage = ref(null);
+const wikiLogs = ref([]);
 const filteredKnowledge = computed(() => {
   const keyword = knowledgeKeyword.value.trim().toLowerCase();
   return knowledgeItems.value.filter((item) => {
@@ -847,12 +923,14 @@ async function loadBackendData() {
     await fetchHealth();
     backendOnline.value = true;
 
-    const [dashboard, remoteKnowledge, remoteJobs, remoteGraph, remoteModelConfig] = await Promise.all([
+    const [dashboard, remoteKnowledge, remoteJobs, remoteGraph, remoteModelConfig, remoteWikiPages, remoteWikiLogs] = await Promise.all([
       fetchDashboard(),
       fetchKnowledgeItems(),
       fetchJobs(),
       fetchGraph(),
-      fetchModelConfig()
+      fetchModelConfig(),
+      fetchWikiPages(),
+      fetchWikiLogs()
     ]);
 
     metrics.value = dashboard.metrics || fallbackMetrics;
@@ -866,6 +944,9 @@ async function loadBackendData() {
     selectedNode.value = graphNodes.value[1] || graphNodes.value[0];
     selectedEdge.value = graphEdges.value[0];
     modelConfig.value = remoteModelConfig;
+    wikiPages.value = remoteWikiPages || [];
+    selectedWikiPage.value = wikiPages.value[0] || null;
+    wikiLogs.value = remoteWikiLogs || [];
   } catch (error) {
     backendOnline.value = false;
   }
@@ -886,6 +967,8 @@ async function refreshCurrentView() {
     await refreshJobs();
   } else if (activeView.value === 'graph') {
     await refreshGraph();
+  } else if (activeView.value === 'wiki') {
+    await refreshWiki();
   } else if (activeView.value === 'models') {
     await refreshModelConfig();
   } else if (activeView.value === 'context') {
@@ -1037,6 +1120,21 @@ async function handleFileSelected(event) {
   selectedKnowledge.value = imported;
   activeView.value = 'knowledge';
   event.target.value = '';
+}
+
+async function refreshWiki() {
+  if (!backendOnline.value) return;
+  wikiPages.value = await fetchWikiPages(wikiKeyword.value, wikiTypeFilter.value);
+  selectedWikiPage.value = wikiPages.value.find((page) => page.id === selectedWikiPage.value?.id) || wikiPages.value[0] || null;
+  wikiLogs.value = await fetchWikiLogs();
+}
+
+async function compileSelectedWikiItem() {
+  if (!backendOnline.value || !wikiCompileItemId.value) return;
+  wikiCompileMessage.value = '正在编译 Wiki 页面...';
+  const result = await compileWikiItem(wikiCompileItemId.value);
+  wikiCompileMessage.value = result.ok ? `${result.mode} 编译完成，生成 ${result.pages?.length || 0} 个页面。` : (result.message || 'Wiki 编译失败');
+  await refreshWiki();
 }
 
 async function runContextGeneration() {

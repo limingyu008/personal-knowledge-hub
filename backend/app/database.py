@@ -71,6 +71,30 @@ def init_db():
                 label TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS wiki_pages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                slug TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL,
+                type TEXT NOT NULL DEFAULT 'summary',
+                content_md TEXT NOT NULL DEFAULT '',
+                source_item_ids_json TEXT NOT NULL DEFAULT '[]',
+                tags_json TEXT NOT NULL DEFAULT '[]',
+                status TEXT NOT NULL DEFAULT 'published',
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS wiki_compile_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                knowledge_item_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL,
+                message TEXT NOT NULL DEFAULT '',
+                pages_json TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (knowledge_item_id) REFERENCES knowledge_items(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS model_config (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 base_url TEXT NOT NULL DEFAULT '',
@@ -122,6 +146,9 @@ def init_db():
         ensure_column(conn, "model_config", "chroma_ssl", "INTEGER NOT NULL DEFAULT 0")
         ensure_column(conn, "model_config", "chroma_api_key", "TEXT NOT NULL DEFAULT ''")
         ensure_column(conn, "model_config", "chroma_collection", "TEXT NOT NULL DEFAULT 'personal_knowledge_chunks'")
+        ensure_column(conn, "wiki_pages", "source_item_ids_json", "TEXT NOT NULL DEFAULT '[]'")
+        ensure_column(conn, "wiki_pages", "tags_json", "TEXT NOT NULL DEFAULT '[]'")
+        ensure_column(conn, "wiki_pages", "status", "TEXT NOT NULL DEFAULT 'published'")
         seed_if_empty(conn)
 
 
