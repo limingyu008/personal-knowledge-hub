@@ -207,7 +207,7 @@
         </section>
       </section>
 
-      <section v-if="activeView === 'graph'" class="graph-layout">
+      <section v-if="activeView === 'graph'" class="graph-layout graph-workbench">
         <div class="graph-canvas">
           <svg viewBox="0 0 760 520" role="img" aria-label="知识图谱">
             <defs>
@@ -239,12 +239,109 @@
             </g>
           </svg>
         </div>
-        <div class="legend-panel">
-          <h2>图谱图例</h2>
-          <span v-for="legend in legends" :key="legend.label">
-            <i :class="legend.type"></i>{{ legend.label }}
-          </span>
+        <div class="legend-panel graph-control-panel">
+          <h2>Neo4j 图谱</h2>
+          <label class="toggle-line">
+            <input v-model="graphConfig.enabled" type="checkbox" />
+            启用 Neo4j
+          </label>
+          <label>URI<input v-model="graphConfig.uri" placeholder="bolt://localhost:7687" /></label>
+          <label>Username<input v-model="graphConfig.username" placeholder="neo4j" /></label>
+          <label>Password<input v-model="graphConfig.password" type="password" placeholder="留空则保持原密码" /></label>
+          <label>Database<input v-model="graphConfig.database" placeholder="neo4j" /></label>
+          <div class="inline-form">
+            <button type="button" @click="saveGraphSettings">保存</button>
+            <button type="button" @click="testGraphSettings">测试</button>
+          </div>
+          <small>{{ graphMessage || `当前来源：${graphSource}` }}</small>
+
+          <div class="compile-box">
+            <h3>抽取实体关系</h3>
+            <input v-model="graphExtractItemId" placeholder="知识 item_id" />
+            <button class="primary-action" type="button" @click="extractSelectedGraphItem">抽取并写入 Neo4j</button>
+          </div>
+
+          <div class="graph-detail-card">
+            <h3>关系详情</h3>
+            <strong>{{ selectedEdge.label || '未选择关系' }}</strong>
+            <p>{{ selectedEdge.from }} → {{ selectedEdge.to }}</p>
+            <small>{{ selectedEdge.evidence || '点击图中的关系线查看证据。' }}</small>
+            <div class="inline-form" v-if="selectedEdge.id">
+              <button type="button" @click="confirmSelectedGraphEdge">确认</button>
+              <button type="button" @click="deleteSelectedGraphEdge">删除</button>
+            </div>
+          </div>
+
+          <div class="graph-legend-list">
+            <span v-for="legend in legends" :key="legend.label">
+              <i :class="legend.type"></i>{{ legend.label }}
+            </span>
+          </div>
         </div>
+      </section>
+
+      <section v-if="activeView === 'wiki'" class="wiki-layout">
+        <aside class="filter-panel">
+          <h2>Wiki 控制台</h2>
+          <label>
+            页面搜索
+            <input v-model="wikiKeyword" placeholder="标题、标签、正文" @keyup.enter="refreshWiki" />
+          </label>
+          <label>
+            页面类型
+            <select v-model="wikiTypeFilter" @change="refreshWiki">
+              <option value="">全部</option>
+              <option v-for="type in wikiTypes" :key="type" :value="type">{{ type }}</option>
+            </select>
+          </label>
+          <div class="compile-box">
+            <h3>编译知识条目</h3>
+            <input v-model="wikiCompileItemId" placeholder="输入知识 item_id" />
+            <button class="primary-action" type="button" @click="compileSelectedWikiItem">编译为 Wiki</button>
+            <small>{{ wikiCompileMessage || '生成/更新 Markdown Wiki 页面，优先使用 Chat 模型。' }}</small>
+          </div>
+        </aside>
+
+        <section class="wiki-main">
+          <div class="wiki-list">
+            <article
+              v-for="page in wikiPages"
+              :key="page.id"
+              class="wiki-card"
+              :class="{ active: selectedWikiPage?.id === page.id }"
+              @click="selectedWikiPage = page"
+            >
+              <div class="recall-title">
+                <strong>{{ page.title }}</strong>
+                <span>{{ page.type }}</span>
+              </div>
+              <p>{{ page.contentMd.slice(0, 150) }}</p>
+              <small>{{ page.slug }} · {{ page.updatedAt }}</small>
+            </article>
+            <article v-if="!wikiPages.length" class="wiki-card">暂无 Wiki 页面，先输入知识 item_id 编译一条。</article>
+          </div>
+
+          <article class="panel wiki-reader">
+            <div class="panel-head">
+              <h2>{{ selectedWikiPage?.title || 'Wiki 页面预览' }}</h2>
+              <span>{{ selectedWikiPage?.type || 'markdown' }}</span>
+            </div>
+            <pre>{{ selectedWikiPage?.contentMd || '编译后的 Markdown Wiki 会显示在这里。' }}</pre>
+          </article>
+        </section>
+
+        <aside class="wiki-log-panel">
+          <h2>编译日志</h2>
+          <article v-for="log in wikiLogs" :key="log.id" class="recall-item">
+            <div class="recall-title">
+              <strong>{{ log.status }}</strong>
+              <span>#{{ log.knowledgeItemId }}</span>
+            </div>
+            <p>{{ log.title }}</p>
+            <small>{{ log.message }} · {{ log.createdAt }}</small>
+          </article>
+          <article v-if="!wikiLogs.length" class="recall-item">暂无编译日志</article>
+        </aside>
       </section>
 
       <section v-if="activeView === 'context'" class="context-grid">
@@ -261,17 +358,146 @@
 
         <section class="panel recall-panel">
           <div class="panel-head">
-            <h2>召回链路</h2>
-            <span>Vector + Graph</span>
+            <h2>调试结果</h2>
+            <span>{{ retrievalDebug.mode || 'keyword' }}</span>
           </div>
-          <article v-for="hit in contextHits" :key="hit.title" class="recall-item">
-            <label>
-              <input type="checkbox" checked />
-              <strong>{{ hit.title }}</strong>
-            </label>
-            <p>{{ hit.reason }}</p>
-            <span>{{ hit.score }}</span>
-          </article>
+          <div class="debug-tabs">
+            <button type="button" :class="{ active: contextDebugTab === 'prompt' }" @click="contextDebugTab = 'prompt'">Prompt 预览</button>
+            <button type="button" :class="{ active: contextDebugTab === 'recall' }" @click="contextDebugTab = 'recall'">召回链路</button>
+            <button type="button" :class="{ active: contextDebugTab === 'vector' }" @click="openVectorDebug">向量调试</button>
+          </div>
+
+          <section v-if="contextDebugTab === 'prompt'" class="prompt-debug-view">
+            <div class="debug-summary">
+              <span>tokens {{ tokenEstimate }}</span>
+              <span>Top K {{ retrievalDebug.topK || contextParams.topK }}</span>
+              <span>limit {{ retrievalDebug.tokenLimit || contextParams.tokenLimit }}</span>
+            </div>
+            <pre>{{ contextPreview }}</pre>
+          </section>
+
+          <section v-else-if="contextDebugTab === 'recall'" class="recall-debug-view">
+            <div class="debug-summary">
+              <span>raw {{ retrievalDebug.rawCount || 0 }}</span>
+              <span>selected {{ retrievalDebug.selectedCount || 0 }}</span>
+              <span>filtered {{ retrievalDebug.filteredCount || 0 }}</span>
+            </div>
+
+            <div v-if="retrievalDebug.errors?.length" class="debug-section">
+              <h3>错误</h3>
+              <article v-for="error in retrievalDebug.errors" :key="error" class="recall-item danger-item">{{ error }}</article>
+            </div>
+
+            <div class="debug-section">
+              <h3>最终进入上下文</h3>
+              <article v-for="item in retrievalDebug.selectedItems" :key="`selected-${item.itemId || item.title}`" class="recall-item selected-recall">
+                <div class="recall-title">
+                  <strong>{{ item.title }}</strong>
+                  <span>{{ formatScore(item.score) }}</span>
+                </div>
+                <p>{{ item.reason || item.reference }}</p>
+                <small>{{ item.reference }}</small>
+                <ul v-if="item.chunks?.length" class="chunk-preview-list">
+                  <li v-for="chunk in item.chunks" :key="`${item.title}-${chunk.chunkIndex}`">
+                    #{{ chunk.chunkIndex ?? '-' }} · {{ formatScore(chunk.score) }} · {{ chunk.preview }}
+                  </li>
+                </ul>
+              </article>
+            </div>
+
+            <div class="debug-section">
+              <h3>原始召回</h3>
+              <article v-for="hit in retrievalDebug.rawHits" :key="`raw-${hit.itemId || hit.title}-${hit.chunkIndex}`" class="recall-item">
+                <div class="recall-title">
+                  <strong>{{ hit.title }}</strong>
+                  <span>{{ formatScore(hit.score) }}</span>
+                </div>
+                <p>{{ hit.reason }}</p>
+                <small v-if="hit.distance !== null && hit.distance !== undefined">distance {{ hit.distance }}</small>
+                <p class="debug-preview">{{ hit.preview }}</p>
+              </article>
+            </div>
+
+            <div class="debug-section">
+              <h3>过滤结果</h3>
+              <article v-if="!retrievalDebug.filteredHits?.length" class="recall-item">暂无过滤项</article>
+              <article v-for="hit in retrievalDebug.filteredHits" :key="`filtered-${hit.itemId || hit.title}-${hit.chunkIndex}-${hit.reason}`" class="recall-item muted-recall">
+                <div class="recall-title">
+                  <strong>{{ hit.title }}</strong>
+                  <span>{{ formatScore(hit.score) }}</span>
+                </div>
+                <p>{{ hit.reason }}</p>
+              </article>
+            </div>
+          </section>
+
+          <section v-else class="vector-debug-view">
+            <div class="debug-section">
+              <div class="vector-status-grid">
+                <article class="vector-status-card" :class="{ online: vectorStatus.ok }">
+                  <span>连接状态</span>
+                  <strong>{{ vectorStatus.ok ? 'OK' : '待检查' }}</strong>
+                  <small>{{ vectorStatus.error || vectorStatus.collection || '点击检查状态' }}</small>
+                </article>
+                <article class="vector-status-card">
+                  <span>Collection</span>
+                  <strong>{{ vectorStatus.count ?? 0 }}</strong>
+                  <small>{{ vectorStatus.collection || modelConfig.chromaCollection }}</small>
+                </article>
+                <article class="vector-status-card">
+                  <span>Embedding</span>
+                  <strong>{{ vectorStatus.embeddingConfigured ? 'Ready' : '缺配置' }}</strong>
+                  <small>{{ vectorStatus.embeddingModel || modelConfig.embeddingModel }}</small>
+                </article>
+              </div>
+              <button type="button" @click="loadVectorStatus">检查状态</button>
+            </div>
+
+            <div class="vector-debug-layout">
+              <section class="debug-section vector-tool-panel">
+                <h3>按 item_id 或标题关键词查看 chunk</h3>
+                <div class="inline-form">
+                  <input v-model="vectorItemId" placeholder="例如 22 或 刘通" />
+                  <button type="button" @click="inspectVectorItem">查询</button>
+                </div>
+                <article v-if="vectorItemResult.title" class="recall-item selected-recall">已匹配：{{ vectorItemResult.title }} · item {{ vectorItemResult.itemId }}</article>
+                <article v-if="vectorItemResult.message" class="recall-item danger-item">{{ vectorItemResult.message }}</article>
+                <article v-for="chunk in vectorItemResult.chunks" :key="chunk.id" class="recall-item">
+                  <div class="recall-title">
+                    <strong>{{ chunk.id }}</strong>
+                    <span>dim {{ chunk.embeddingDim }}</span>
+                  </div>
+                  <p>{{ chunk.title }} · #{{ chunk.chunkIndex }}</p>
+                  <small>preview {{ chunk.embeddingPreview?.join(', ') || '-' }}</small>
+                  <p class="debug-preview">{{ chunk.documentPreview }}</p>
+                </article>
+              </section>
+
+              <section class="debug-section vector-tool-panel">
+                <h3>按问题做向量召回</h3>
+                <textarea v-model="vectorSearchForm.query" rows="4" placeholder="输入要测试的检索问题"></textarea>
+                <div class="inline-form">
+                  <input v-model.number="vectorSearchForm.topK" placeholder="TopK" />
+                  <button class="primary-action" type="button" @click="runVectorSearch">召回测试</button>
+                </div>
+                <div class="debug-summary compact-summary">
+                  <span>query dim {{ vectorSearchResult.queryEmbeddingDim || 0 }}</span>
+                  <span>TopK {{ vectorSearchResult.topK || vectorSearchForm.topK }}</span>
+                  <span>hits {{ vectorSearchResult.hits?.length || 0 }}</span>
+                </div>
+                <article v-if="vectorSearchResult.message" class="recall-item danger-item">{{ vectorSearchResult.message }}</article>
+                <article v-for="hit in vectorSearchResult.hits" :key="hit.id" class="recall-item selected-recall">
+                  <div class="recall-title">
+                    <strong>{{ hit.title }}</strong>
+                    <span>{{ formatScore(hit.score) }}</span>
+                  </div>
+                  <p>{{ hit.id }} · item {{ hit.itemId }} · chunk #{{ hit.chunkIndex }}</p>
+                  <small>distance {{ hit.distance }}</small>
+                  <p class="debug-preview">{{ hit.documentPreview }}</p>
+                </article>
+              </section>
+            </div>
+          </section>
         </section>
       </section>
 
@@ -299,7 +525,26 @@
               <option value="vector">Embedding + Chroma 向量检索</option>
             </select>
           </label>
-          <label>Chroma 存储路径<input v-model="modelConfig.chromaPath" placeholder="默认 backend/data/chroma" /></label>
+          <label>
+            Chroma 模式
+            <select v-model="modelConfig.chromaMode">
+              <option value="local">本地持久化</option>
+              <option value="http">HTTP 服务</option>
+            </select>
+          </label>
+          <label v-if="modelConfig.chromaMode !== 'http'">Chroma 存储路径<input v-model="modelConfig.chromaPath" placeholder="默认 backend/data/chroma" /></label>
+          <div v-else class="config-group compact-config">
+            <h3>Chroma HTTP 服务</h3>
+            <label>Host<input v-model="modelConfig.chromaHost" placeholder="localhost" /></label>
+            <label>Port<input v-model.number="modelConfig.chromaPort" placeholder="8000" /></label>
+            <label>SSL
+              <select v-model="modelConfig.chromaSsl">
+                <option :value="false">false</option>
+                <option :value="true">true</option>
+              </select>
+            </label>
+            <label>API Key<input v-model="modelConfig.chromaApiKey" type="password" placeholder="可选，Chroma Token" /></label>
+          </div>
           <label>Chroma Collection<input v-model="modelConfig.chromaCollection" placeholder="personal_knowledge_chunks" /></label>
           <label>
             文档解析模式
@@ -308,8 +553,15 @@
               <option value="mineru">MinerU 服务解析</option>
             </select>
           </label>
-          <label>MinerU 服务地址<input v-model="modelConfig.mineruBaseUrl" placeholder="http://127.0.0.1:8000" /></label>
-          <label>MinerU API Key<input v-model="modelConfig.mineruApiKey" type="password" placeholder="可选" /></label>
+          <label>MinerU 解析接口地址<input v-model="modelConfig.mineruBaseUrl" placeholder="https://xxx/openapi/v1/ocr/mineru-parser" /></label>
+          <label>MinerU API Key<input v-model="modelConfig.mineruApiKey" type="password" placeholder="Bearer Token，可选" /></label>
+          <label>MinerU Model<input v-model="modelConfig.mineruModel" placeholder="mineru-vl" /></label>
+          <label>MinerU only_md
+            <select v-model="modelConfig.mineruOnlyMd">
+              <option :value="true">true</option>
+              <option :value="false">false</option>
+            </select>
+          </label>
           <button type="button" @click="saveModelSettings">保存配置</button>
           <button class="primary-action" type="button" @click="testModelSettings">测试连接</button>
           <button type="button" @click="rebuildVectors">重建向量索引</button>
@@ -404,21 +656,33 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue';
 import {
+  confirmGraphRelation,
   createKnowledgeItem,
+  deleteGraphRelation,
   deleteKnowledgeItem,
+  extractGraphItem,
   fetchDashboard,
   fetchGraph,
+  fetchGraphConfig,
   fetchHealth,
   fetchJobs,
   fetchKnowledgeItems,
   fetchModelConfig,
+  fetchVectorItemChunks,
+  fetchVectorStatus,
+  fetchWikiLogs,
+  fetchWikiPages,
   generateContext,
   importFile,
   importManual,
   importWebpage,
+  compileWikiItem,
   rebuildVectorIndex,
+  saveGraphConfig,
   saveModelConfig,
+  searchVectorDebug,
   testChatModel,
+  testGraphConfig,
   testEmbeddingModel,
   updateKnowledgeItem
 } from './api';
@@ -429,6 +693,7 @@ const navItems = [
   { key: 'import', label: '导入知识', subtitle: '文件、网页和手动笔记入口', icon: '↥' },
   { key: 'jobs', label: '加工队列', subtitle: '解析、抽取和向量化流水线', icon: '⚙' },
   { key: 'graph', label: '知识图谱', subtitle: '实体、关系和证据网络', icon: '◎' },
+  { key: 'wiki', label: 'Wiki 编译', subtitle: 'Markdown Wiki 页面和编译日志', icon: '▧' },
   { key: 'context', label: '上下文调试台', subtitle: '检索链路和 Prompt 控制台', icon: '▤' },
   { key: 'models', label: '模型配置', subtitle: 'OpenAI 兼容 API 设置', icon: '◇' },
   { key: 'settings', label: '系统设置', subtitle: '本地存储与安全策略', icon: '◌' }
@@ -445,6 +710,7 @@ const fileInput = ref(null);
 const knowledgeDialog = ref(null);
 const knowledgeForm = ref(emptyKnowledgeForm());
 const contextParams = ref({ topK: 8, graphDepth: 1, tokenLimit: 3200 });
+const contextDebugTab = ref('recall');
 
 const currentNav = computed(() => navItems.find((item) => item.key === activeView.value));
 
@@ -521,6 +787,14 @@ const pipeline = ref(fallbackPipeline);
 const activities = ref(fallbackActivities);
 const knowledgeItems = ref(fallbackKnowledgeItems);
 const selectedKnowledge = ref(fallbackKnowledgeItems[0]);
+const wikiTypes = ['summary', 'person', 'project', 'concept', 'decision', 'risk', 'index', 'log'];
+const wikiKeyword = ref('');
+const wikiTypeFilter = ref('');
+const wikiCompileItemId = ref('');
+const wikiCompileMessage = ref('');
+const wikiPages = ref([]);
+const selectedWikiPage = ref(null);
+const wikiLogs = ref([]);
 const filteredKnowledge = computed(() => {
   const keyword = knowledgeKeyword.value.trim().toLowerCase();
   return knowledgeItems.value.filter((item) => {
@@ -612,13 +886,20 @@ const graphNodes = ref(fallbackGraphNodes);
 const graphEdges = ref(fallbackGraphEdges);
 const selectedNode = ref(fallbackGraphNodes[1]);
 const selectedEdge = ref(fallbackGraphEdges[0]);
+const graphConfig = ref({ enabled: false, uri: 'bolt://localhost:7687', username: 'neo4j', password: '', database: 'neo4j' });
+const graphExtractItemId = ref('');
+const graphMessage = ref('');
+const graphSource = ref('sqlite');
 const legends = [
   { label: '人物', type: 'person' },
   { label: '项目', type: 'project' },
   { label: '技术', type: 'tech' },
   { label: '概念', type: 'concept' },
   { label: '决策', type: 'decision' },
-  { label: '风险', type: 'risk' }
+  { label: '风险', type: 'risk' },
+  { label: '公司', type: 'company' },
+  { label: '资源', type: 'resource' },
+  { label: '任务', type: 'task' }
 ];
 
 function nodeById(id) {
@@ -631,7 +912,25 @@ const fallbackContextHits = [
   { title: '知识图谱抽取策略', reason: '提供实体关系待确认和证据链策略', score: '0.86' },
   { title: '机会雷达产品化路径', reason: '补充个人副业产品化偏好', score: '0.78' }
 ];
+const fallbackRetrievalDebug = {
+  mode: 'keyword',
+  topK: 8,
+  tokenLimit: 3200,
+  rawCount: 3,
+  selectedCount: 3,
+  filteredCount: 0,
+  rawHits: fallbackContextHits.map((hit) => ({ ...hit, preview: hit.reason })),
+  selectedItems: fallbackContextHits.map((hit) => ({ ...hit, reference: '本地知识库', chunks: [] })),
+  filteredHits: [],
+  errors: []
+};
 const contextHits = ref(fallbackContextHits);
+const retrievalDebug = ref(fallbackRetrievalDebug);
+const vectorStatus = ref({ ok: false, enabled: false, count: 0, error: '', collection: '', embeddingConfigured: false, embeddingModel: '' });
+const vectorItemId = ref('');
+const vectorItemResult = ref({ ok: false, itemId: '', chunks: [], message: '' });
+const vectorSearchForm = ref({ query: contextQuestion.value, topK: 5 });
+const vectorSearchResult = ref({ ok: false, query: '', topK: 5, queryEmbeddingDim: 0, hits: [], message: '' });
 const capabilities = ['Chat 摘要', '标签生成', '实体抽取', '关系抽取', 'Embedding', '上下文压缩'];
 const tips = ['优先维护“当前项目”和“决策”类知识。', '待确认关系过多时会降低上下文可信度。', '建议为浏览器插件增加保存选中文本能力。'];
 const modelConfig = ref({
@@ -647,11 +946,18 @@ const modelConfig = ref({
   embeddingTimeoutSeconds: 45,
   timeoutSeconds: 45,
   retrievalMode: 'keyword',
+  chromaMode: 'local',
   chromaPath: '',
+  chromaHost: 'localhost',
+  chromaPort: 8000,
+  chromaSsl: false,
+  chromaApiKey: '',
   chromaCollection: 'personal_knowledge_chunks',
   parserMode: 'local',
   mineruBaseUrl: '',
-  mineruApiKey: ''
+  mineruApiKey: '',
+  mineruModel: 'mineru-vl',
+  mineruOnlyMd: true
 });
 
 onMounted(async () => {
@@ -663,12 +969,15 @@ async function loadBackendData() {
     await fetchHealth();
     backendOnline.value = true;
 
-    const [dashboard, remoteKnowledge, remoteJobs, remoteGraph, remoteModelConfig] = await Promise.all([
+    const [dashboard, remoteKnowledge, remoteJobs, remoteGraph, remoteModelConfig, remoteGraphConfig, remoteWikiPages, remoteWikiLogs] = await Promise.all([
       fetchDashboard(),
       fetchKnowledgeItems(),
       fetchJobs(),
-      fetchGraph(),
-      fetchModelConfig()
+      fetchGraph().catch(() => ({ nodes: [], edges: [], source: 'sqlite' })),
+      fetchModelConfig(),
+      fetchGraphConfig().catch(() => graphConfig.value),
+      fetchWikiPages().catch(() => []),
+      fetchWikiLogs().catch(() => [])
     ]);
 
     metrics.value = dashboard.metrics || fallbackMetrics;
@@ -680,8 +989,13 @@ async function loadBackendData() {
     graphNodes.value = remoteGraph.nodes?.length ? remoteGraph.nodes : fallbackGraphNodes;
     graphEdges.value = remoteGraph.edges?.length ? remoteGraph.edges : fallbackGraphEdges;
     selectedNode.value = graphNodes.value[1] || graphNodes.value[0];
-    selectedEdge.value = graphEdges.value[0];
+    selectedEdge.value = graphEdges.value[0] || {};
+    graphSource.value = remoteGraph.source || 'sqlite';
+    graphConfig.value = remoteGraphConfig;
     modelConfig.value = remoteModelConfig;
+    wikiPages.value = remoteWikiPages || [];
+    selectedWikiPage.value = wikiPages.value[0] || null;
+    wikiLogs.value = remoteWikiLogs || [];
   } catch (error) {
     backendOnline.value = false;
   }
@@ -702,6 +1016,8 @@ async function refreshCurrentView() {
     await refreshJobs();
   } else if (activeView.value === 'graph') {
     await refreshGraph();
+  } else if (activeView.value === 'wiki') {
+    await refreshWiki();
   } else if (activeView.value === 'models') {
     await refreshModelConfig();
   } else if (activeView.value === 'context') {
@@ -733,8 +1049,79 @@ async function refreshGraph() {
   const remoteGraph = await fetchGraph();
   graphNodes.value = remoteGraph.nodes?.length ? remoteGraph.nodes : graphNodes.value;
   graphEdges.value = remoteGraph.edges?.length ? remoteGraph.edges : graphEdges.value;
+  graphSource.value = remoteGraph.source || graphSource.value;
   selectedNode.value = graphNodes.value.find((node) => node.id === selectedNode.value?.id) || graphNodes.value[0];
-  selectedEdge.value = graphEdges.value.find((edge) => edge.id === selectedEdge.value?.id) || graphEdges.value[0];
+  selectedEdge.value = graphEdges.value.find((edge) => edge.id === selectedEdge.value?.id) || graphEdges.value[0] || {};
+}
+
+async function saveGraphSettings() {
+  if (!backendOnline.value) {
+    graphMessage.value = '后端服务离线，无法保存 Neo4j 配置';
+    return;
+  }
+  try {
+    graphMessage.value = '正在保存 Neo4j 配置...';
+    graphConfig.value = await saveGraphConfig(graphConfig.value);
+    graphMessage.value = 'Neo4j 配置已保存';
+    await refreshGraph();
+  } catch (error) {
+    graphMessage.value = `保存失败：${error.message}`;
+  }
+}
+
+async function testGraphSettings() {
+  if (!backendOnline.value) {
+    graphMessage.value = '后端服务离线，无法测试 Neo4j';
+    return;
+  }
+  try {
+    graphMessage.value = '正在测试 Neo4j 连接...';
+    const result = await testGraphConfig();
+    graphMessage.value = result.message || (result.ok ? 'Neo4j 连接正常' : 'Neo4j 连接失败');
+  } catch (error) {
+    graphMessage.value = `测试失败：${error.message}`;
+  }
+}
+
+async function extractSelectedGraphItem() {
+  if (!backendOnline.value) {
+    graphMessage.value = '后端服务离线，无法抽取图谱';
+    return;
+  }
+  if (!graphExtractItemId.value) {
+    graphMessage.value = '请先输入知识 item_id';
+    return;
+  }
+  try {
+    graphMessage.value = '正在抽取实体关系...';
+    const result = await extractGraphItem(graphExtractItemId.value);
+    graphMessage.value = result.ok ? `写入 ${result.written.entities} 个实体、${result.written.relations} 条关系。` : (result.message || '图谱抽取失败');
+    await refreshGraph();
+  } catch (error) {
+    graphMessage.value = `抽取失败：${error.message}`;
+  }
+}
+
+async function confirmSelectedGraphEdge() {
+  if (!backendOnline.value || !selectedEdge.value?.id) return;
+  try {
+    const result = await confirmGraphRelation(selectedEdge.value.id);
+    graphMessage.value = result.ok ? '关系已确认' : (result.message || '确认失败');
+    await refreshGraph();
+  } catch (error) {
+    graphMessage.value = `确认失败：${error.message}`;
+  }
+}
+
+async function deleteSelectedGraphEdge() {
+  if (!backendOnline.value || !selectedEdge.value?.id) return;
+  try {
+    const result = await deleteGraphRelation(selectedEdge.value.id);
+    graphMessage.value = result.ok ? '关系已删除' : (result.message || '删除失败');
+    await refreshGraph();
+  } catch (error) {
+    graphMessage.value = `删除失败：${error.message}`;
+  }
 }
 
 async function refreshModelConfig() {
@@ -855,20 +1242,39 @@ async function handleFileSelected(event) {
   event.target.value = '';
 }
 
+async function refreshWiki() {
+  if (!backendOnline.value) return;
+  wikiPages.value = await fetchWikiPages(wikiKeyword.value, wikiTypeFilter.value);
+  selectedWikiPage.value = wikiPages.value.find((page) => page.id === selectedWikiPage.value?.id) || wikiPages.value[0] || null;
+  wikiLogs.value = await fetchWikiLogs();
+}
+
+async function compileSelectedWikiItem() {
+  if (!backendOnline.value || !wikiCompileItemId.value) return;
+  wikiCompileMessage.value = '正在编译 Wiki 页面...';
+  const result = await compileWikiItem(wikiCompileItemId.value);
+  wikiCompileMessage.value = result.ok ? `${result.mode} 编译完成，生成 ${result.pages?.length || 0} 个页面。` : (result.message || 'Wiki 编译失败');
+  await refreshWiki();
+}
+
 async function runContextGeneration() {
   if (!backendOnline.value) {
     contextHits.value = fallbackContextHits;
+    retrievalDebug.value = fallbackRetrievalDebug;
     tokenEstimate.value = '2,186';
     return;
   }
 
   const result = await generateContext({
     question: contextQuestion.value,
-    top_k: contextParams.value.topK
+    top_k: contextParams.value.topK,
+    tokenLimit: contextParams.value.tokenLimit
   });
   contextHits.value = result.hits || fallbackContextHits;
+  retrievalDebug.value = result.debug || fallbackRetrievalDebug;
   tokenEstimate.value = result.tokenEstimate || '0';
   generatedPrompt.value = result.prompt || '';
+  contextDebugTab.value = 'recall';
 }
 
 async function saveModelSettings() {
@@ -894,9 +1300,38 @@ async function rebuildVectors() {
   } else {
     tips.unshift(result.message || `向量索引重建失败，失败 ${result.failed?.length || 0} 条。`);
   }
+  await loadVectorStatus();
+}
+
+async function openVectorDebug() {
+  contextDebugTab.value = 'vector';
+  await loadVectorStatus();
+}
+
+async function loadVectorStatus() {
+  if (!backendOnline.value) return;
+  vectorStatus.value = await fetchVectorStatus();
+}
+
+async function inspectVectorItem() {
+  if (!backendOnline.value || !vectorItemId.value) return;
+  vectorItemResult.value = await fetchVectorItemChunks(vectorItemId.value);
+}
+
+async function runVectorSearch() {
+  if (!backendOnline.value || !vectorSearchForm.value.query.trim()) return;
+  vectorSearchResult.value = await searchVectorDebug({
+    query: vectorSearchForm.value.query,
+    topK: Number(vectorSearchForm.value.topK || 5)
+  });
 }
 
 const generatedPrompt = ref('');
+
+function formatScore(score) {
+  const value = Number(score || 0);
+  return value.toFixed(2);
+}
 
 const inspectorTitle = computed(() => {
   if (activeView.value === 'knowledge') return selectedKnowledge.value.title;

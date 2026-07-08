@@ -71,6 +71,39 @@ def init_db():
                 label TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS graph_config (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                enabled INTEGER NOT NULL DEFAULT 0,
+                uri TEXT NOT NULL DEFAULT 'bolt://localhost:7687',
+                username TEXT NOT NULL DEFAULT 'neo4j',
+                password TEXT NOT NULL DEFAULT '',
+                database TEXT NOT NULL DEFAULT 'neo4j'
+            );
+
+            CREATE TABLE IF NOT EXISTS wiki_pages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                slug TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL,
+                type TEXT NOT NULL DEFAULT 'summary',
+                content_md TEXT NOT NULL DEFAULT '',
+                source_item_ids_json TEXT NOT NULL DEFAULT '[]',
+                tags_json TEXT NOT NULL DEFAULT '[]',
+                status TEXT NOT NULL DEFAULT 'published',
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS wiki_compile_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                knowledge_item_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL,
+                message TEXT NOT NULL DEFAULT '',
+                pages_json TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (knowledge_item_id) REFERENCES knowledge_items(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS model_config (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 base_url TEXT NOT NULL DEFAULT '',
@@ -88,8 +121,15 @@ def init_db():
                 parser_mode TEXT NOT NULL DEFAULT 'local',
                 mineru_base_url TEXT NOT NULL DEFAULT '',
                 mineru_api_key TEXT NOT NULL DEFAULT '',
+                mineru_model TEXT NOT NULL DEFAULT 'mineru-vl',
+                mineru_only_md INTEGER NOT NULL DEFAULT 1,
                 retrieval_mode TEXT NOT NULL DEFAULT 'keyword',
+                chroma_mode TEXT NOT NULL DEFAULT 'local',
                 chroma_path TEXT NOT NULL DEFAULT '',
+                chroma_host TEXT NOT NULL DEFAULT 'localhost',
+                chroma_port INTEGER NOT NULL DEFAULT 8000,
+                chroma_ssl INTEGER NOT NULL DEFAULT 0,
+                chroma_api_key TEXT NOT NULL DEFAULT '',
                 chroma_collection TEXT NOT NULL DEFAULT 'personal_knowledge_chunks'
             );
             """
@@ -105,9 +145,31 @@ def init_db():
         ensure_column(conn, "model_config", "parser_mode", "TEXT NOT NULL DEFAULT 'local'")
         ensure_column(conn, "model_config", "mineru_base_url", "TEXT NOT NULL DEFAULT ''")
         ensure_column(conn, "model_config", "mineru_api_key", "TEXT NOT NULL DEFAULT ''")
+        ensure_column(conn, "model_config", "mineru_model", "TEXT NOT NULL DEFAULT 'mineru-vl'")
+        ensure_column(conn, "model_config", "mineru_only_md", "INTEGER NOT NULL DEFAULT 1")
         ensure_column(conn, "model_config", "retrieval_mode", "TEXT NOT NULL DEFAULT 'keyword'")
+        ensure_column(conn, "model_config", "chroma_mode", "TEXT NOT NULL DEFAULT 'local'")
         ensure_column(conn, "model_config", "chroma_path", "TEXT NOT NULL DEFAULT ''")
+        ensure_column(conn, "model_config", "chroma_host", "TEXT NOT NULL DEFAULT 'localhost'")
+        ensure_column(conn, "model_config", "chroma_port", "INTEGER NOT NULL DEFAULT 8000")
+        ensure_column(conn, "model_config", "chroma_ssl", "INTEGER NOT NULL DEFAULT 0")
+        ensure_column(conn, "model_config", "chroma_api_key", "TEXT NOT NULL DEFAULT ''")
         ensure_column(conn, "model_config", "chroma_collection", "TEXT NOT NULL DEFAULT 'personal_knowledge_chunks'")
+        ensure_column(conn, "wiki_pages", "source_item_ids_json", "TEXT NOT NULL DEFAULT '[]'")
+        ensure_column(conn, "wiki_pages", "tags_json", "TEXT NOT NULL DEFAULT '[]'")
+        ensure_column(conn, "wiki_pages", "status", "TEXT NOT NULL DEFAULT 'published'")
+        ensure_column(conn, "graph_config", "enabled", "INTEGER NOT NULL DEFAULT 0")
+        ensure_column(conn, "graph_config", "uri", "TEXT NOT NULL DEFAULT 'bolt://localhost:7687'")
+        ensure_column(conn, "graph_config", "username", "TEXT NOT NULL DEFAULT 'neo4j'")
+        ensure_column(conn, "graph_config", "password", "TEXT NOT NULL DEFAULT ''")
+        ensure_column(conn, "graph_config", "database", "TEXT NOT NULL DEFAULT 'neo4j'")
+        conn.execute(
+            """
+            INSERT INTO graph_config (id, enabled, uri, username, password, database)
+            VALUES (1, 0, 'bolt://localhost:7687', 'neo4j', '', 'neo4j')
+            ON CONFLICT(id) DO NOTHING
+            """
+        )
         seed_if_empty(conn)
 
 
@@ -264,11 +326,11 @@ def seed_if_empty(conn):
             (id, base_url, api_key, chat_base_url, chat_api_key, chat_model,
              embedding_base_url, embedding_api_key, embedding_model,
              timeout_seconds, chat_timeout_seconds, embedding_timeout_seconds, enabled,
-             parser_mode, mineru_base_url, mineru_api_key, retrieval_mode, chroma_path, chroma_collection)
+             parser_mode, mineru_base_url, mineru_api_key, mineru_model, mineru_only_md, retrieval_mode, chroma_mode, chroma_path, chroma_host, chroma_port, chroma_ssl, chroma_api_key, chroma_collection)
         VALUES (1, 'https://api.openai.com/v1', '', 'https://api.openai.com/v1', '', 'gpt-4.1-mini',
                 'https://api.openai.com/v1', '', 'text-embedding-3-small',
                 45, 45, 45, 0,
-                'local', '', '', 'keyword', '', 'personal_knowledge_chunks')
+                'local', '', '', 'mineru-vl', 1, 'keyword', 'local', '', 'localhost', 8000, 0, '', 'personal_knowledge_chunks')
         """
     )
 

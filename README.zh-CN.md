@@ -190,6 +190,11 @@ Personal Knowledge Hub 支持两条上下文生成路径：
 - 关键词检索：默认模式，不需要模型密钥。
 - Embedding + Chroma 向量检索：通过 OpenAI 兼容 Embedding API 对 chunk 向量化，并写入 Chroma。
 
+Chroma 可以在“模型配置”中选择两种连接模式：
+
+- 本地持久化模式：使用 `backend/data/chroma` 或自定义本地路径。
+- HTTP 服务模式：连接独立 Chroma Server，可配置 host、port、SSL 和可选 API Key。
+
 切换到向量检索后，点击 `重建向量索引`，即可将已有知识 chunk 写入 Chroma。后续新导入或编辑的知识会自动更新向量索引。
 
 ## 文档解析
@@ -202,13 +207,15 @@ Personal Knowledge Hub 支持两条上下文生成路径：
 MinerU 调用约定：
 
 ```text
-POST {MinerU 服务地址}/parse
+POST {MinerU 解析接口地址}
 Content-Type: multipart/form-data
-file: 上传文件
 Authorization: Bearer <MinerU API Key，可选>
+files: 上传文件
+model: mineru-vl
+only_md: true
 ```
 
-服务返回 JSON 中需包含 `text`、`content` 或 `markdown` 字段之一。
+`MinerU 解析接口地址` 支持填写完整私有化接口，例如 `/openapi/v1/ocr/mineru-parser`。服务可以流式返回 Markdown 文本，也可以返回包含 `text`、`content`、`markdown`、`md` 或 `data` 字段的 JSON。
 
 ## API 概览
 

@@ -190,6 +190,11 @@ Personal Knowledge Hub supports two context retrieval paths:
 - Keyword retrieval: default mode, no model credential required.
 - Embedding + Chroma vector retrieval: embeds chunks through an OpenAI-compatible Embedding API and stores vectors in Chroma.
 
+Chroma supports two connection modes from Model Settings:
+
+- Local persistent mode: uses `backend/data/chroma` or a custom local path.
+- HTTP service mode: connects to a standalone Chroma server with host, port, SSL and optional API key.
+
 After switching to vector retrieval, click `Rebuild Vector Index` to write existing chunks into Chroma. Newly imported or edited knowledge will update the vector index automatically.
 
 ## Document Parsing
@@ -202,13 +207,15 @@ The parser mode can be changed from the Model Settings page and takes effect wit
 MinerU request contract:
 
 ```text
-POST {MinerU Base URL}/parse
+POST {MinerU Parser URL}
 Content-Type: multipart/form-data
-file: uploaded file
 Authorization: Bearer <MinerU API Key, optional>
+files: uploaded file
+model: mineru-vl
+only_md: true
 ```
 
-The service response should include one of these JSON fields: `text`, `content`, or `markdown`.
+`MinerU Parser URL` can be a full private endpoint such as `/openapi/v1/ocr/mineru-parser`. The response can be a Markdown text stream, or JSON containing one of these fields: `text`, `content`, `markdown`, `md`, or `data`.
 
 ## API Overview
 

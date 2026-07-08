@@ -110,8 +110,15 @@ export function saveModelConfig(payload) {
       parserMode: payload.parserMode || 'local',
       mineruBaseUrl: payload.mineruBaseUrl || '',
       mineruApiKey: payload.mineruApiKey || '',
+      mineruModel: payload.mineruModel || 'mineru-vl',
+      mineruOnlyMd: payload.mineruOnlyMd !== false,
       retrievalMode: payload.retrievalMode || 'keyword',
+      chromaMode: payload.chromaMode || 'local',
       chromaPath: payload.chromaPath || '',
+      chromaHost: payload.chromaHost || 'localhost',
+      chromaPort: Number(payload.chromaPort || 8000),
+      chromaSsl: Boolean(payload.chromaSsl),
+      chromaApiKey: payload.chromaApiKey || '',
       chromaCollection: payload.chromaCollection || 'personal_knowledge_chunks'
     })
   });
@@ -127,4 +134,62 @@ export function testEmbeddingModel() {
 
 export function rebuildVectorIndex() {
   return request('/vector/rebuild', { method: 'POST' });
+}
+
+export function fetchVectorStatus() {
+  return request('/vector/status');
+}
+
+export function fetchVectorItemChunks(itemId) {
+  return request(`/vector/items/${encodeURIComponent(itemId)}/chunks`);
+}
+
+export function searchVectorDebug(payload) {
+  return request('/vector/search', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
+export function fetchWikiPages(keyword = '', type = '') {
+  const params = new URLSearchParams();
+  if (keyword) params.set('keyword', keyword);
+  if (type) params.set('type', type);
+  const query = params.toString() ? `?${params.toString()}` : '';
+  return request(`/wiki/pages${query}`);
+}
+
+export function fetchWikiLogs() {
+  return request('/wiki/logs');
+}
+
+export function compileWikiItem(itemId) {
+  return request(`/wiki/compile/${encodeURIComponent(itemId)}`, { method: 'POST' });
+}
+
+export function fetchGraphConfig() {
+  return request('/graph/config');
+}
+
+export function saveGraphConfig(payload) {
+  return request('/graph/config', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
+export function testGraphConfig() {
+  return request('/graph/test', { method: 'POST' });
+}
+
+export function extractGraphItem(itemId) {
+  return request(`/graph/extract/${encodeURIComponent(itemId)}`, { method: 'POST' });
+}
+
+export function confirmGraphRelation(edgeId) {
+  return request(`/graph/relations/${encodeURIComponent(edgeId)}/confirm`, { method: 'POST' });
+}
+
+export function deleteGraphRelation(edgeId) {
+  return request(`/graph/relations/${encodeURIComponent(edgeId)}`, { method: 'DELETE' });
 }

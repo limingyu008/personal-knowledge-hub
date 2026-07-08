@@ -774,3 +774,308 @@ menu {
     grid-template-columns: repeat(3, 1fr);
   }
 }
+
+.debug-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.debug-tabs button {
+  min-height: 36px;
+}
+
+.prompt-debug-view,
+.recall-debug-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.prompt-debug-view pre {
+  min-height: 460px;
+  max-height: 560px;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid rgba(96, 145, 170, 0.24);
+  border-radius: 8px;
+  background: rgba(4, 11, 18, 0.72);
+  color: #dff5ff;
+  padding: 12px;
+  white-space: pre-wrap;
+  line-height: 1.58;
+}
+
+.debug-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.debug-summary span {
+  border: 1px solid rgba(96, 145, 170, 0.22);
+  border-radius: 7px;
+  background: rgba(10, 24, 36, 0.68);
+  color: #9fc4d9;
+  padding: 8px 10px;
+  text-align: center;
+}
+
+.debug-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.debug-section h3 {
+  color: #dcecff;
+  font-size: 14px;
+  margin: 4px 0 0;
+}
+
+.recall-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.recall-title span {
+  color: #7ee8ff;
+  font-variant-numeric: tabular-nums;
+}
+
+.recall-item small {
+  display: block;
+  color: #7894a8;
+  line-height: 1.45;
+  word-break: break-all;
+}
+
+.selected-recall {
+  border-color: rgba(78, 221, 255, 0.46);
+  background: rgba(11, 32, 44, 0.72);
+}
+
+.muted-recall {
+  opacity: 0.76;
+}
+
+.danger-item {
+  border-color: rgba(255, 117, 132, 0.42);
+  color: #ffb3bd;
+}
+
+.chunk-preview-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chunk-preview-list li,
+.debug-preview {
+  border-left: 2px solid rgba(78, 221, 255, 0.36);
+  color: #a9c1d2;
+  margin: 0;
+  padding-left: 9px;
+  line-height: 1.5;
+}
+
+.vector-debug-view {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.vector-status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.vector-status-card {
+  border: 1px solid rgba(96, 145, 170, 0.26);
+  border-radius: 8px;
+  background: rgba(8, 20, 31, 0.74);
+  padding: 12px;
+  box-shadow: inset 0 -1px 0 rgba(80, 223, 255, 0.12);
+}
+
+.vector-status-card.online {
+  border-color: rgba(75, 232, 169, 0.48);
+}
+
+.vector-status-card span,
+.vector-status-card small {
+  display: block;
+  color: #8ba9bc;
+}
+
+.vector-status-card strong {
+  display: block;
+  color: #e5f4ff;
+  font-size: 24px;
+  margin: 8px 0;
+}
+
+.vector-debug-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.25fr);
+  gap: 12px;
+}
+
+.vector-tool-panel {
+  min-width: 0;
+}
+
+.inline-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.inline-form input,
+.vector-tool-panel textarea {
+  width: 100%;
+}
+
+.compact-summary {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.wiki-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr) 300px;
+  gap: 14px;
+  min-height: 680px;
+}
+
+.wiki-main {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.85fr) minmax(0, 1.3fr);
+  gap: 14px;
+  min-width: 0;
+}
+
+.wiki-list,
+.wiki-log-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.wiki-card {
+  border: 1px solid rgba(82, 130, 158, 0.28);
+  border-radius: 8px;
+  background: rgba(8, 20, 31, 0.72);
+  padding: 12px;
+  cursor: pointer;
+}
+
+.wiki-card.active {
+  border-color: rgba(78, 221, 255, 0.74);
+  box-shadow: 0 0 0 1px rgba(78, 221, 255, 0.12), inset 0 1px 0 rgba(122, 226, 255, 0.12);
+}
+
+.wiki-card p {
+  color: #9fb7c9;
+  line-height: 1.5;
+  margin: 8px 0;
+}
+
+.wiki-card small {
+  color: #7894a8;
+  word-break: break-all;
+}
+
+.wiki-reader {
+  min-width: 0;
+}
+
+.wiki-reader pre {
+  min-height: 560px;
+  max-height: 680px;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid rgba(96, 145, 170, 0.24);
+  border-radius: 8px;
+  background: rgba(4, 11, 18, 0.72);
+  color: #dff5ff;
+  padding: 14px;
+  white-space: pre-wrap;
+  line-height: 1.62;
+}
+
+.compile-box {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  border-top: 1px solid rgba(96, 145, 170, 0.22);
+  padding-top: 14px;
+}
+
+.compile-box h3,
+.wiki-log-panel h2 {
+  margin: 0;
+  color: #e5f4ff;
+}
+
+.compile-box small {
+  color: #8faabd;
+  line-height: 1.45;
+}
+
+.graph-workbench {
+  grid-template-columns: minmax(0, 1fr) 340px;
+}
+
+.graph-control-panel {
+  gap: 12px;
+  overflow: auto;
+}
+
+.graph-control-panel label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: #9fb7c9;
+}
+
+.graph-control-panel .toggle-line {
+  flex-direction: row;
+  align-items: center;
+}
+
+.graph-detail-card {
+  border: 1px solid rgba(82, 130, 158, 0.28);
+  border-radius: 8px;
+  background: rgba(8, 20, 31, 0.72);
+  padding: 12px;
+}
+
+.graph-detail-card h3 {
+  margin: 0 0 8px;
+  color: #e5f4ff;
+}
+
+.graph-detail-card p,
+.graph-detail-card small {
+  color: #9fb7c9;
+  word-break: break-all;
+}
+
+.graph-legend-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.graph-node circle.company { fill: rgba(104, 211, 145, 0.28); stroke: #68d391; }
+.graph-node circle.resource { fill: rgba(148, 163, 184, 0.24); stroke: #94a3b8; }
+.graph-node circle.goal { fill: rgba(56, 189, 248, 0.24); stroke: #38bdf8; }
+.graph-node circle.task { fill: rgba(251, 191, 36, 0.22); stroke: #fbbf24; }

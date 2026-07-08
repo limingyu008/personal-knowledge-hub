@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import List, Optional
 
 import requests
@@ -8,8 +9,34 @@ from pydantic import BaseModel, Field
 
 from .database import DATA_DIR, get_connection, init_db, parse_json
 from .document_parser import ParseError, SUPPORTED_SUFFIXES, parse_document, split_chunks
-from .vector_store import VectorStoreError, delete_item_vectors, enabled as vector_enabled, query_chunks, upsert_chunks
+from .logging_config import configure_logging
+from .graph_extractor import extract_graph_candidates
+from .neo4j_graph import (
+    GraphStoreError,
+    confirm_relation,
+    delete_relation,
+    get_graph_config,
+    list_graph,
+    save_graph_config,
+    test_graph_connection,
+    upsert_candidates,
+)
+from .wiki_compiler import WikiCompileError, compile_knowledge_item_to_wiki
+from .wiki_repository import get_wiki_page, list_compile_logs, list_wiki_pages
+from .vector_store import (
+    VectorStoreError,
+    collection_count,
+    delete_item_vectors,
+    enabled as vector_enabled,
+    inspect_item_vectors,
+    query_chunks,
+    search_vector_debug,
+    upsert_chunks,
+)
 
+
+log_file = configure_logging()
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Personal Knowledge Hub", version="0.1.0")
 
@@ -55,6 +82,24 @@ class WebImportRequest(BaseModel):
 class ContextRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     top_k: int = 8
+    token_limit: int = Field(default=3200, alias="tokenLimit")
+
+    model_config = {"populate_by_name": True}
+
+
+class VectorSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+    top_k: int = Field(default=5, alias="topK")
+
+    model_config = {"populate_by_name": True}
+
+
+class GraphConfigRequest(BaseModel):
+    enabled: bool = False
+    uri: str = "bolt://localhost:7687"
+    username: str = "neo4j"
+    password: str = ""
+    database: str = "neo4j"
 
 
 class ModelConfigRequest(BaseModel):
@@ -73,8 +118,15 @@ class ModelConfigRequest(BaseModel):
     parser_mode: str = Field(default="local", alias="parserMode")
     mineru_base_url: str = Field(default="", alias="mineruBaseUrl")
     mineru_api_key: str = Field(default="", alias="mineruApiKey")
+    mineru_model: str = Field(default="mineru-vl", alias="mineruModel")
+    mineru_only_md: bool = Field(default=True, alias="mineruOnlyMd")
     retrieval_mode: str = Field(default="keyword", alias="retrievalMode")
+    chroma_mode: str = Field(default="local", alias="chromaMode")
     chroma_path: str = Field(default="", alias="chromaPath")
+    chroma_host: str = Field(default="localhost", alias="chromaHost")
+    chroma_port: int = Field(default=8000, alias="chromaPort")
+    chroma_ssl: bool = Field(default=False, alias="chromaSsl")
+    chroma_api_key: str = Field(default="", alias="chromaApiKey")
     chroma_collection: str = Field(default="personal_knowledge_chunks", alias="chromaCollection")
 
     model_config = {"populate_by_name": True}
@@ -83,6 +135,7 @@ class ModelConfigRequest(BaseModel):
 @app.on_event("startup")
 def startup():
     init_db()
+    logger.info("Personal Knowledge Hub 启动完成，日志文件：%s", log_file)
 
 
 @app.get("/api/health")
@@ -126,6 +179,35 @@ def dashboard():
             {"title": "上下文调试台待接入模型", "desc": "当前返回基于关键词的上下文模拟结果", "time": "MVP"},
         ],
     }
+
+
+@app.get("/api/wiki/pages")
+def wiki_pages(keyword: Optional[str] = None, type: Optional[str] = None):
+    return list_wiki_pages(keyword or "", type or "")
+
+
+@app.get("/api/wiki/pages/{page_id}")
+def wiki_page_detail(page_id: int):
+    page = get_wiki_page(page_id)
+    if not page:
+        raise HTTPException(status_code=404, detail="Wiki page not found")
+    return page
+
+
+@app.get("/api/wiki/logs")
+def wiki_logs():
+    return list_compile_logs()
+
+
+@app.post("/api/wiki/compile/{item_id}")
+def compile_wiki_item(item_id: int):
+    item = get_knowledge_item_for_service(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Knowledge item not found")
+    try:
+        return compile_knowledge_item_to_wiki(item, get_model_config())
+    except WikiCompileError as exc:
+        return {"ok": False, "message": str(exc), "pages": []}
 
 
 @app.get("/api/knowledge-items")
@@ -187,10 +269,12 @@ def update_knowledge_item(item_id: int, request: KnowledgeUpdateRequest):
     item = knowledge_row(row)
     chunks = split_chunks(item["content"])
     save_chunks(item["id"], chunks)
-    try:
-        upsert_chunks(item, chunks, get_model_config())
-    except VectorStoreError:
-        pass
+    if index_vectors:
+        try:
+            upsert_chunks(item, chunks, get_model_config())
+        except VectorStoreError as exc:
+            logger.exception("知识条目向量索引失败，item_id：%s，title：%s", item["id"], item["title"])
+            item["vectorError"] = str(exc)
     return item
 
 
@@ -256,10 +340,13 @@ def import_webpage(request: WebImportRequest):
 async def import_file(file: UploadFile = File(...)):
     filename = file.filename or "untitled.txt"
     suffix = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    logger.info("收到文件上传，文件名：%s，后缀：%s", filename, suffix)
     if suffix not in SUPPORTED_SUFFIXES:
+        logger.warning("文件类型不支持，文件名：%s，后缀：%s", filename, suffix)
         raise HTTPException(status_code=400, detail="暂只支持 TXT、Markdown、PDF、Word .docx 文件")
 
     raw = await file.read()
+    logger.info("文件读取完成，文件名：%s，大小：%s bytes", filename, len(raw))
     upload_dir = DATA_DIR / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
     safe_name = filename.replace("/", "_").replace("\\", "_")
@@ -268,9 +355,12 @@ async def import_file(file: UploadFile = File(...)):
 
     source = source_from_suffix(suffix)
     parser_config = get_model_config()
+    logger.info("开始导入文件，文件名：%s，来源：%s，解析模式：%s，保存路径：%s", filename, source, parser_config.get("parserMode"), file_path)
     try:
         content = parse_document(file_path, parser_config)
+        logger.info("文件解析成功，文件名：%s，文本长度：%s", filename, len(content or ""))
     except ParseError as exc:
+        logger.exception("文件解析失败，文件名：%s", filename)
         item = insert_knowledge_item(
             title=filename,
             content="",
@@ -281,6 +371,7 @@ async def import_file(file: UploadFile = File(...)):
             status="解析失败",
             status_type="danger",
             create_job=False,
+            index_vectors=False,
         )
         create_processing_job_for_item(item["id"], filename, source, "失败", "danger", str(exc), failed_step="抽取")
         return item
@@ -293,13 +384,18 @@ async def import_file(file: UploadFile = File(...)):
         source_url=str(file_path),
         tags=[source, "文件"],
         create_job=False,
+        index_vectors=False,
     )
     chunks = split_chunks(content)
     save_chunks(item["id"], chunks)
     try:
         upsert_chunks(item, chunks, get_model_config())
+        logger.info("文件向量索引处理完成，文件名：%s，chunk 数：%s", filename, len(chunks))
     except VectorStoreError as exc:
+        logger.warning("文件已入库但向量索引失败，文件名：%s，原因：%s", filename, exc)
         create_processing_job_for_item(item["id"], filename, source, "失败", "danger", str(exc), failed_step="向量")
+        item["chunkCount"] = len(chunks)
+        item["vectorError"] = str(exc)
         return item
     create_processing_job_for_item(item["id"], filename, source, "待确认", "warning", "", failed_step="")
     item["chunkCount"] = len(chunks)
@@ -343,49 +439,100 @@ def list_jobs():
 
 @app.get("/api/graph")
 def graph():
-    with get_connection() as conn:
-        nodes = conn.execute("SELECT id, label, type_key, x, y FROM graph_nodes").fetchall()
-        edges = conn.execute("SELECT id, from_node, to_node, status, label FROM graph_edges").fetchall()
-    return {
-        "nodes": [
-            {"id": row["id"], "label": row["label"], "typeKey": row["type_key"], "x": row["x"], "y": row["y"]}
-            for row in nodes
-        ],
-        "edges": [
-            {"id": row["id"], "from": row["from_node"], "to": row["to_node"], "status": row["status"], "label": row["label"]}
-            for row in edges
-        ],
-    }
+    return list_graph(get_graph_config())
+
+
+@app.get("/api/graph/config")
+def graph_config():
+    config = get_graph_config()
+    return {**config, "password": ""}
+
+
+@app.post("/api/graph/config")
+def save_graph_settings(request: GraphConfigRequest):
+    current = get_graph_config()
+    payload = request.model_dump()
+    if not payload.get("password"):
+        payload["password"] = current.get("password", "")
+    saved = save_graph_config(payload)
+    return {**saved, "password": ""}
+
+
+@app.post("/api/graph/test")
+def test_graph_settings():
+    return test_graph_connection(get_graph_config())
+
+
+@app.post("/api/graph/extract/{item_id}")
+def extract_graph_item(item_id: int):
+    item = get_knowledge_item_for_service(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Knowledge item not found")
+    config = get_graph_config()
+    if not config.get("enabled"):
+        return {"ok": False, "message": "Neo4j 图谱未启用，请先保存配置并启用。"}
+    try:
+        candidates = extract_graph_candidates(item, get_model_config())
+        written = upsert_candidates(candidates, item, config)
+    except GraphStoreError as exc:
+        return {"ok": False, "message": str(exc)}
+    except Exception as exc:
+        logger.exception("图谱抽取写入失败，item_id：%s", item_id)
+        return {"ok": False, "message": "图谱抽取写入失败：{}".format(exc)}
+    return {"ok": True, "itemId": item_id, "candidates": candidates, "written": written}
+
+
+@app.post("/api/graph/relations/{edge_id}/confirm")
+def confirm_graph_relation(edge_id: str):
+    try:
+        return confirm_relation(edge_id, get_graph_config())
+    except Exception as exc:
+        logger.exception("确认图谱关系失败，edge_id：%s", edge_id)
+        return {"ok": False, "message": str(exc)}
+
+
+@app.delete("/api/graph/relations/{edge_id}")
+def remove_graph_relation(edge_id: str):
+    try:
+        return delete_relation(edge_id, get_graph_config())
+    except Exception as exc:
+        logger.exception("删除图谱关系失败，edge_id：%s", edge_id)
+        return {"ok": False, "message": str(exc)}
 
 
 @app.post("/api/context/generate")
 def generate_context(request: ContextRequest):
     config = get_model_config()
+    token_limit = normalize_token_limit(request.token_limit)
+    top_k = normalize_top_k(request.top_k)
+
+    retrieval_mode = "vector" if vector_enabled(config) else "keyword"
+    raw_hits = []
+    filtered_hits = []
     try:
-        ranked_items = query_chunks(request.question, request.top_k, config) if vector_enabled(config) else rank_context_items(request.question)[: request.top_k]
+        if retrieval_mode == "vector":
+            raw_hits = query_chunks(request.question, max(top_k * 3, top_k), config)
+            context_items, filtered_hits = prepare_vector_context_items(raw_hits, top_k)
+        else:
+            raw_hits = rank_context_items(request.question)
+            context_items = prepare_keyword_context_items(raw_hits[:top_k])
     except VectorStoreError as exc:
-        ranked_items = []
         prompt = "# 个人上下文\n向量检索失败：{}。请检查 Embedding API、API Key、Chroma 配置，或切换为关键词检索。".format(exc)
         prompt += "\n\n# 当前问题\n" + request.question
-        return {"hits": [], "prompt": prompt, "tokenEstimate": estimate_tokens(prompt)}
-
-    hits = [
-        {
-            "title": item["title"],
-            "reason": item["reason"],
-            "score": "{:.2f}".format(item["score"]),
+        return {
+            "hits": [],
+            "prompt": prompt,
+            "tokenEstimate": estimate_tokens(prompt),
+            "debug": build_retrieval_debug("vector", request.question, top_k, token_limit, [], [], [], [str(exc)]),
         }
-        for item in ranked_items
-    ]
-    if ranked_items:
-        prompt = "# 个人上下文\n" + "\n".join(
-            "- {title}: {summary}".format(title=item["title"], summary=item["summary"]) for item in ranked_items
-        )
-    else:
-        prompt = "# 个人上下文\n未召回到明确相关的知识。请谨慎回答，并指出需要补充哪些背景。"
-    prompt += "\n\n# 当前问题\n" + request.question
-    prompt += "\n\n# 回答要求\n请结合已确认知识、项目目标和风险约束，给出可执行建议。"
-    return {"hits": hits, "prompt": prompt, "tokenEstimate": estimate_tokens(prompt)}
+
+    prompt = build_context_prompt(context_items, request.question, token_limit)
+    return {
+        "hits": format_context_hits(context_items),
+        "prompt": prompt,
+        "tokenEstimate": estimate_tokens(prompt),
+        "debug": build_retrieval_debug(retrieval_mode, request.question, top_k, token_limit, raw_hits, context_items, filtered_hits, []),
+    }
 
 
 @app.get("/api/model-config")
@@ -396,8 +543,8 @@ def get_model_config():
             SELECT base_url, api_key, chat_base_url, chat_api_key, chat_model,
                    embedding_base_url, embedding_api_key, embedding_model,
                    timeout_seconds, chat_timeout_seconds, embedding_timeout_seconds, enabled,
-                   parser_mode, mineru_base_url, mineru_api_key,
-                   retrieval_mode, chroma_path, chroma_collection
+                   parser_mode, mineru_base_url, mineru_api_key, mineru_model, mineru_only_md,
+                   retrieval_mode, chroma_mode, chroma_path, chroma_host, chroma_port, chroma_ssl, chroma_api_key, chroma_collection
             FROM model_config WHERE id = 1
             """
         ).fetchone()
@@ -419,8 +566,15 @@ def get_model_config():
         "parserMode": row["parser_mode"],
         "mineruBaseUrl": row["mineru_base_url"],
         "mineruApiKey": row["mineru_api_key"],
+        "mineruModel": row["mineru_model"] or "mineru-vl",
+        "mineruOnlyMd": bool(row["mineru_only_md"]),
         "retrievalMode": row["retrieval_mode"],
+        "chromaMode": row["chroma_mode"] or "local",
         "chromaPath": row["chroma_path"],
+        "chromaHost": row["chroma_host"] or "localhost",
+        "chromaPort": row["chroma_port"] or 8000,
+        "chromaSsl": bool(row["chroma_ssl"]),
+        "chromaApiKey": row["chroma_api_key"],
         "chromaCollection": row["chroma_collection"],
     }
 
@@ -434,8 +588,8 @@ def save_model_config(request: ModelConfigRequest):
                 (id, base_url, api_key, chat_base_url, chat_api_key, chat_model,
                  embedding_base_url, embedding_api_key, embedding_model,
                  timeout_seconds, chat_timeout_seconds, embedding_timeout_seconds, enabled,
-                 parser_mode, mineru_base_url, mineru_api_key, retrieval_mode, chroma_path, chroma_collection)
-            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 parser_mode, mineru_base_url, mineru_api_key, mineru_model, mineru_only_md, retrieval_mode, chroma_mode, chroma_path, chroma_host, chroma_port, chroma_ssl, chroma_api_key, chroma_collection)
+            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 base_url = excluded.base_url,
                 api_key = excluded.api_key,
@@ -452,8 +606,15 @@ def save_model_config(request: ModelConfigRequest):
                 parser_mode = excluded.parser_mode,
                 mineru_base_url = excluded.mineru_base_url,
                 mineru_api_key = excluded.mineru_api_key,
+                mineru_model = excluded.mineru_model,
+                mineru_only_md = excluded.mineru_only_md,
                 retrieval_mode = excluded.retrieval_mode,
+                chroma_mode = excluded.chroma_mode,
                 chroma_path = excluded.chroma_path,
+                chroma_host = excluded.chroma_host,
+                chroma_port = excluded.chroma_port,
+                chroma_ssl = excluded.chroma_ssl,
+                chroma_api_key = excluded.chroma_api_key,
                 chroma_collection = excluded.chroma_collection
             """,
             (
@@ -472,8 +633,15 @@ def save_model_config(request: ModelConfigRequest):
                 request.parser_mode if request.parser_mode in {"local", "mineru"} else "local",
                 request.mineru_base_url,
                 request.mineru_api_key,
+                request.mineru_model or "mineru-vl",
+                1 if request.mineru_only_md else 0,
                 request.retrieval_mode if request.retrieval_mode in {"keyword", "vector"} else "keyword",
+                request.chroma_mode if request.chroma_mode in {"local", "http"} else "local",
                 request.chroma_path,
+                request.chroma_host or "localhost",
+                request.chroma_port or 8000,
+                1 if request.chroma_ssl else 0,
+                request.chroma_api_key,
                 request.chroma_collection or "personal_knowledge_chunks",
             ),
         )
@@ -518,6 +686,84 @@ def test_embedding_model():
     return {"ok": True, "message": "Embedding API 连通性正常。"}
 
 
+@app.get("/api/vector/status")
+def vector_status():
+    config = get_model_config()
+    status = {
+        "enabled": vector_enabled(config),
+        "retrievalMode": config.get("retrievalMode"),
+        "chromaMode": config.get("chromaMode"),
+        "host": config.get("chromaHost"),
+        "port": config.get("chromaPort"),
+        "ssl": config.get("chromaSsl"),
+        "collection": config.get("chromaCollection"),
+        "embeddingConfigured": bool(config.get("embeddingBaseUrl") and config.get("embeddingApiKey") and config.get("embeddingModel")),
+        "embeddingModel": config.get("embeddingModel"),
+        "ok": False,
+        "count": 0,
+        "error": "",
+    }
+    if not status["enabled"]:
+        status["error"] = "当前检索模式不是向量检索"
+        return status
+    try:
+        status["count"] = collection_count(config)
+        status["ok"] = True
+    except VectorStoreError as exc:
+        status["error"] = str(exc)
+    return status
+
+
+@app.get("/api/vector/items/{item_key}/chunks")
+def vector_item_chunks(item_key: str):
+    config = get_model_config()
+    resolved = resolve_vector_item_key(item_key)
+    if not resolved:
+        return {"ok": False, "itemKey": item_key, "itemId": None, "chunks": [], "message": "未找到匹配的知识条目"}
+    item_id = resolved["id"]
+    if not vector_enabled(config):
+        return {"ok": False, "itemKey": item_key, "itemId": item_id, "chunks": [], "message": "当前检索模式不是向量检索"}
+    try:
+        chunks = inspect_item_vectors(item_id, config)
+    except VectorStoreError as exc:
+        return {"ok": False, "itemKey": item_key, "itemId": item_id, "chunks": [], "message": str(exc)}
+    return {"ok": True, "itemKey": item_key, "itemId": item_id, "title": resolved["title"], "chunks": chunks}
+
+
+def resolve_vector_item_key(item_key: str):
+    key = (item_key or "").strip()
+    if not key:
+        return None
+    with get_connection() as conn:
+        if key.isdigit():
+            row = conn.execute("SELECT id, title FROM knowledge_items WHERE id = ?", (int(key),)).fetchone()
+            return {"id": row["id"], "title": row["title"]} if row else None
+        pattern = "%{}%".format(key)
+        row = conn.execute(
+            """
+            SELECT id, title FROM knowledge_items
+            WHERE title LIKE ? OR summary LIKE ? OR content LIKE ?
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 1
+            """,
+            (pattern, pattern, pattern),
+        ).fetchone()
+        return {"id": row["id"], "title": row["title"]} if row else None
+
+
+@app.post("/api/vector/search")
+def vector_search(request: VectorSearchRequest):
+    config = get_model_config()
+    if not vector_enabled(config):
+        return {"ok": False, "query": request.query, "topK": request.top_k, "hits": [], "message": "当前检索模式不是向量检索"}
+    try:
+        result = search_vector_debug(request.query, max(1, min(request.top_k, 20)), config)
+    except VectorStoreError as exc:
+        return {"ok": False, "query": request.query, "topK": request.top_k, "hits": [], "message": str(exc)}
+    result["ok"] = True
+    return result
+
+
 @app.post("/api/vector/rebuild")
 def rebuild_vector_index():
     config = get_model_config()
@@ -548,6 +794,18 @@ def rebuild_vector_index():
     return {"ok": not failed, "indexedChunks": indexed, "failed": failed}
 
 
+def get_knowledge_item_for_service(item_id: int):
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT id, title, summary, content, source, source_url, status, status_type, tags_json, updated_at
+            FROM knowledge_items WHERE id = ?
+            """,
+            (item_id,),
+        ).fetchone()
+    return knowledge_row(row) if row else None
+
+
 def knowledge_row(row):
     return {
         "id": row["id"],
@@ -569,6 +827,266 @@ def to_json(value):
 
 def estimate_tokens(text):
     return max(1, int(len(text) / 1.8))
+
+
+def normalize_top_k(value):
+    try:
+        top_k = int(value)
+    except (TypeError, ValueError):
+        top_k = 8
+    return max(1, min(top_k, 20))
+
+
+def normalize_token_limit(value):
+    try:
+        token_limit = int(value)
+    except (TypeError, ValueError):
+        token_limit = 3200
+    return max(600, min(token_limit, 12000))
+
+
+def prepare_keyword_context_items(items):
+    prepared = []
+    for item in items:
+        item = dict(item)
+        item["chunks"] = []
+        item["reference"] = build_reference(item)
+        prepared.append(item)
+    return prepared
+
+
+def prepare_vector_context_items(raw_hits, top_k):
+    grouped = {}
+    filtered = []
+    for hit in raw_hits:
+        score = float(hit.get("score") or 0)
+        if score < 0.15:
+            filtered.append(build_filtered_hit(hit, "分数低于阈值 0.15"))
+            continue
+
+        item_id = hit.get("itemId")
+        group_key = str(item_id or hit.get("title") or len(grouped))
+        group = grouped.setdefault(group_key, {
+            "id": item_id,
+            "title": hit.get("title") or "未命名知识",
+            "summary": hit.get("summary") or "",
+            "source": hit.get("source") or "",
+            "score": score,
+            "chunks": [],
+            "chunkIndexes": [],
+            "distances": [],
+        })
+        group["score"] = max(group["score"], score)
+        chunk_content = (hit.get("content") or "").strip()
+        if chunk_content and chunk_content not in [chunk["content"] for chunk in group["chunks"]]:
+            group["chunks"].append({
+                "content": chunk_content,
+                "score": score,
+                "chunkIndex": hit.get("chunkIndex"),
+            })
+        elif chunk_content:
+            filtered.append(build_filtered_hit(hit, "同一知识条目内重复 chunk"))
+        if hit.get("chunkIndex") is not None:
+            group["chunkIndexes"].append(hit.get("chunkIndex"))
+        if hit.get("distance") is not None:
+            group["distances"].append(hit.get("distance"))
+
+    ranked_items = sorted(grouped.values(), key=lambda item: item["score"], reverse=True)
+    items = ranked_items[:top_k]
+    for item in ranked_items[top_k:]:
+        filtered.append({
+            "title": item.get("title") or "未命名知识",
+            "score": round(float(item.get("score") or 0), 4),
+            "reason": "Top K 聚合后截断",
+        })
+    enrich_context_items_from_db(items)
+
+    for item in items:
+        item["chunks"] = sorted(item["chunks"], key=lambda chunk: chunk["score"], reverse=True)[:2]
+        chunk_indexes = sorted({index for index in item.get("chunkIndexes", []) if index is not None})
+        item["reason"] = "Chroma 向量召回，命中 chunk：{}，已按知识条目去重聚合。".format(
+            ", ".join(str(index) for index in chunk_indexes[:6]) if chunk_indexes else "-"
+        )
+        item["reference"] = build_reference(item)
+    return items, filtered
+
+
+def build_filtered_hit(hit, reason):
+    return {
+        "title": hit.get("title") or "未命名知识",
+        "itemId": hit.get("itemId"),
+        "chunkIndex": hit.get("chunkIndex"),
+        "score": round(float(hit.get("score") or 0), 4),
+        "distance": hit.get("distance"),
+        "reason": reason,
+    }
+
+
+def enrich_context_items_from_db(items):
+    item_ids = [int(item["id"]) for item in items if item.get("id") is not None]
+    if not item_ids:
+        return
+
+    placeholders = ",".join("?" for _ in item_ids)
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, title, summary, source, source_url, status, tags_json, updated_at
+            FROM knowledge_items
+            WHERE id IN ({})
+            """.format(placeholders),
+            item_ids,
+        ).fetchall()
+
+    by_id = {row["id"]: row for row in rows}
+    for item in items:
+        row = by_id.get(item.get("id"))
+        if not row:
+            continue
+        item["title"] = row["title"]
+        item["summary"] = row["summary"] or item.get("summary") or ""
+        item["source"] = row["source"]
+        item["sourceUrl"] = row["source_url"]
+        item["status"] = row["status"]
+        item["tags"] = parse_json(row["tags_json"], [])
+        item["updatedAt"] = row["updated_at"]
+
+
+def build_reference(item):
+    parts = []
+    if item.get("source"):
+        parts.append(str(item["source"]))
+    if item.get("sourceUrl"):
+        parts.append(str(item["sourceUrl"]))
+    if item.get("updatedAt"):
+        parts.append("updated {}".format(item["updatedAt"]))
+    return " / ".join(parts) or "本地知识库"
+
+
+def build_retrieval_debug(mode, question, top_k, token_limit, raw_hits, context_items, filtered_hits, errors):
+    return {
+        "mode": mode,
+        "question": question,
+        "topK": top_k,
+        "tokenLimit": token_limit,
+        "rawCount": len(raw_hits),
+        "selectedCount": len(context_items),
+        "filteredCount": len(filtered_hits),
+        "rawHits": [format_debug_raw_hit(hit) for hit in raw_hits[:30]],
+        "selectedItems": [format_debug_selected_item(item) for item in context_items],
+        "filteredHits": filtered_hits[:30],
+        "errors": errors,
+    }
+
+
+def format_debug_raw_hit(hit):
+    return {
+        "title": hit.get("title") or "未命名知识",
+        "itemId": hit.get("itemId") or hit.get("id"),
+        "chunkIndex": hit.get("chunkIndex"),
+        "score": round(float(hit.get("score") or 0), 4),
+        "distance": hit.get("distance"),
+        "reason": hit.get("reason") or "",
+        "preview": normalize_context_text(hit.get("content") or hit.get("summary") or "")[:240],
+    }
+
+
+def format_debug_selected_item(item):
+    chunks = item.get("chunks") or []
+    return {
+        "title": item.get("title") or "未命名知识",
+        "itemId": item.get("id"),
+        "score": round(float(item.get("score") or 0), 4),
+        "source": item.get("source") or "",
+        "reference": item.get("reference") or build_reference(item),
+        "reason": item.get("reason") or "",
+        "chunkCount": len(chunks),
+        "chunks": [
+            {
+                "chunkIndex": chunk.get("chunkIndex"),
+                "score": round(float(chunk.get("score") or 0), 4),
+                "preview": normalize_context_text(chunk.get("content") or "")[:260],
+            }
+            for chunk in chunks
+        ],
+    }
+
+
+def format_context_hits(items):
+    hits = []
+    for item in items:
+        reason = item.get("reason") or "命中标题、摘要、标签或切块，已纳入上下文候选。"
+        if item.get("reference"):
+            reason = "{} 来源：{}".format(reason, item["reference"])
+        hits.append({
+            "title": item["title"],
+            "reason": reason,
+            "score": "{:.2f}".format(float(item.get("score") or 0)),
+        })
+    return hits
+
+
+def build_context_prompt(items, question, token_limit):
+    header = "# 个人上下文\n"
+    footer = "\n\n# 当前问题\n{}\n\n# 回答要求\n请优先引用上方已召回知识；当知识不足或冲突时，请明确指出缺口；结合项目目标、风险约束和可执行步骤回答。".format(question)
+    budget = max(200, token_limit - estimate_tokens(header + footer))
+
+    if not items:
+        return header + "未召回到明确相关的知识。请谨慎回答，并指出需要补充哪些背景。" + footer
+
+    sections = []
+    used_tokens = 0
+    for index, item in enumerate(items, 1):
+        summary = item.get("summary") or "无摘要"
+        reference = item.get("reference") or build_reference(item)
+        section_head = "## [{}] {}\n- 相关分：{:.2f}\n- 来源：{}\n- 摘要：{}".format(
+            index,
+            item.get("title") or "未命名知识",
+            float(item.get("score") or 0),
+            reference,
+            summary,
+        )
+        section_parts = [section_head]
+        for chunk_index, chunk in enumerate(item.get("chunks") or [], 1):
+            chunk_text = normalize_context_text(chunk.get("content") or "")
+            if not chunk_text:
+                continue
+            section_parts.append("- 命中片段 {}：{}".format(chunk_index, chunk_text))
+
+        section = "\n".join(section_parts)
+        section_tokens = estimate_tokens(section)
+        if used_tokens + section_tokens > budget:
+            remaining = budget - used_tokens - estimate_tokens(section_head) - 20
+            if remaining <= 120:
+                break
+            truncated_parts = [section_head]
+            for chunk_index, chunk in enumerate(item.get("chunks") or [], 1):
+                chunk_text = truncate_to_tokens(normalize_context_text(chunk.get("content") or ""), remaining)
+                if chunk_text:
+                    truncated_parts.append("- 命中片段 {}：{}".format(chunk_index, chunk_text))
+                    break
+            section = "\n".join(truncated_parts)
+            sections.append(section)
+            used_tokens += estimate_tokens(section)
+            break
+
+        sections.append(section)
+        used_tokens += section_tokens
+
+    if not sections:
+        sections.append("未召回到可放入 token 预算的知识片段。")
+    return header + "\n\n".join(sections) + footer
+
+
+def normalize_context_text(text):
+    return " ".join((text or "").split())
+
+
+def truncate_to_tokens(text, token_limit):
+    max_chars = max(80, int(token_limit * 1.8))
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "..."
 
 
 def rank_context_items(question):
@@ -688,6 +1206,7 @@ def insert_knowledge_item(
     status="已入库",
     status_type="success",
     create_job=True,
+    index_vectors=True,
 ):
     summary = summary or make_summary(content)
     with get_connection() as conn:
@@ -711,10 +1230,12 @@ def insert_knowledge_item(
     item = knowledge_row(row)
     chunks = split_chunks(item["content"])
     save_chunks(item["id"], chunks)
-    try:
-        upsert_chunks(item, chunks, get_model_config())
-    except VectorStoreError:
-        pass
+    if index_vectors:
+        try:
+            upsert_chunks(item, chunks, get_model_config())
+        except VectorStoreError as exc:
+            logger.exception("知识条目向量索引失败，item_id：%s，title：%s", item["id"], item["title"])
+            item["vectorError"] = str(exc)
     return item
 
 
