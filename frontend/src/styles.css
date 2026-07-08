@@ -1029,3 +1029,53 @@ menu {
   color: #8faabd;
   line-height: 1.45;
 }
+
+.graph-workbench {
+  grid-template-columns: minmax(0, 1fr) 340px;
+}
+
+.graph-control-panel {
+  gap: 12px;
+  overflow: auto;
+}
+
+.graph-control-panel label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: #9fb7c9;
+}
+
+.graph-control-panel .toggle-line {
+  flex-direction: row;
+  align-items: center;
+}
+
+.graph-detail-card {
+  border: 1px solid rgba(82, 130, 158, 0.28);
+  border-radius: 8px;
+  background: rgba(8, 20, 31, 0.72);
+  padding: 12px;
+}
+
+.graph-detail-card h3 {
+  margin: 0 0 8px;
+  color: #e5f4ff;
+}
+
+.graph-detail-card p,
+.graph-detail-card small {
+  color: #9fb7c9;
+  word-break: break-all;
+}
+
+.graph-legend-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.graph-node circle.company { fill: rgba(104, 211, 145, 0.28); stroke: #68d391; }
+.graph-node circle.resource { fill: rgba(148, 163, 184, 0.24); stroke: #94a3b8; }
+.graph-node circle.goal { fill: rgba(56, 189, 248, 0.24); stroke: #38bdf8; }
+.graph-node circle.task { fill: rgba(251, 191, 36, 0.22); stroke: #fbbf24; }

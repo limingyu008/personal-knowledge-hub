@@ -166,3 +166,30 @@ export function fetchWikiLogs() {
 export function compileWikiItem(itemId) {
   return request(`/wiki/compile/${encodeURIComponent(itemId)}`, { method: 'POST' });
 }
+
+export function fetchGraphConfig() {
+  return request('/graph/config');
+}
+
+export function saveGraphConfig(payload) {
+  return request('/graph/config', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+}
+
+export function testGraphConfig() {
+  return request('/graph/test', { method: 'POST' });
+}
+
+export function extractGraphItem(itemId) {
+  return request(`/graph/extract/${encodeURIComponent(itemId)}`, { method: 'POST' });
+}
+
+export function confirmGraphRelation(edgeId) {
+  return request(`/graph/relations/${encodeURIComponent(edgeId)}/confirm`, { method: 'POST' });
+}
+
+export function deleteGraphRelation(edgeId) {
+  return request(`/graph/relations/${encodeURIComponent(edgeId)}`, { method: 'DELETE' });
+}

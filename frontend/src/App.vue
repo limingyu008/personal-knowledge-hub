@@ -207,7 +207,7 @@
         </section>
       </section>
 
-      <section v-if="activeView === 'graph'" class="graph-layout">
+      <section v-if="activeView === 'graph'" class="graph-layout graph-workbench">
         <div class="graph-canvas">
           <svg viewBox="0 0 760 520" role="img" aria-label="知识图谱">
             <defs>
@@ -239,11 +239,44 @@
             </g>
           </svg>
         </div>
-        <div class="legend-panel">
-          <h2>图谱图例</h2>
-          <span v-for="legend in legends" :key="legend.label">
-            <i :class="legend.type"></i>{{ legend.label }}
-          </span>
+        <div class="legend-panel graph-control-panel">
+          <h2>Neo4j 图谱</h2>
+          <label class="toggle-line">
+            <input v-model="graphConfig.enabled" type="checkbox" />
+            启用 Neo4j
+          </label>
+          <label>URI<input v-model="graphConfig.uri" placeholder="bolt://localhost:7687" /></label>
+          <label>Username<input v-model="graphConfig.username" placeholder="neo4j" /></label>
+          <label>Password<input v-model="graphConfig.password" type="password" placeholder="留空则保持原密码" /></label>
+          <label>Database<input v-model="graphConfig.database" placeholder="neo4j" /></label>
+          <div class="inline-form">
+            <button type="button" @click="saveGraphSettings">保存</button>
+            <button type="button" @click="testGraphSettings">测试</button>
+          </div>
+          <small>{{ graphMessage || `当前来源：${graphSource}` }}</small>
+
+          <div class="compile-box">
+            <h3>抽取实体关系</h3>
+            <input v-model="graphExtractItemId" placeholder="知识 item_id" />
+            <button class="primary-action" type="button" @click="extractSelectedGraphItem">抽取并写入 Neo4j</button>
+          </div>
+
+          <div class="graph-detail-card">
+            <h3>关系详情</h3>
+            <strong>{{ selectedEdge.label || '未选择关系' }}</strong>
+            <p>{{ selectedEdge.from }} → {{ selectedEdge.to }}</p>
+            <small>{{ selectedEdge.evidence || '点击图中的关系线查看证据。' }}</small>
+            <div class="inline-form" v-if="selectedEdge.id">
+              <button type="button" @click="confirmSelectedGraphEdge">确认</button>
+              <button type="button" @click="deleteSelectedGraphEdge">删除</button>
+            </div>
+          </div>
+
+          <div class="graph-legend-list">
+            <span v-for="legend in legends" :key="legend.label">
+              <i :class="legend.type"></i>{{ legend.label }}
+            </span>
+          </div>
         </div>
       </section>
 
@@ -623,10 +656,14 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue';
 import {
+  confirmGraphRelation,
   createKnowledgeItem,
+  deleteGraphRelation,
   deleteKnowledgeItem,
+  extractGraphItem,
   fetchDashboard,
   fetchGraph,
+  fetchGraphConfig,
   fetchHealth,
   fetchJobs,
   fetchKnowledgeItems,
@@ -641,9 +678,11 @@ import {
   importWebpage,
   compileWikiItem,
   rebuildVectorIndex,
+  saveGraphConfig,
   saveModelConfig,
   searchVectorDebug,
   testChatModel,
+  testGraphConfig,
   testEmbeddingModel,
   updateKnowledgeItem
 } from './api';
@@ -847,13 +886,20 @@ const graphNodes = ref(fallbackGraphNodes);
 const graphEdges = ref(fallbackGraphEdges);
 const selectedNode = ref(fallbackGraphNodes[1]);
 const selectedEdge = ref(fallbackGraphEdges[0]);
+const graphConfig = ref({ enabled: false, uri: 'bolt://localhost:7687', username: 'neo4j', password: '', database: 'neo4j' });
+const graphExtractItemId = ref('');
+const graphMessage = ref('');
+const graphSource = ref('sqlite');
 const legends = [
   { label: '人物', type: 'person' },
   { label: '项目', type: 'project' },
   { label: '技术', type: 'tech' },
   { label: '概念', type: 'concept' },
   { label: '决策', type: 'decision' },
-  { label: '风险', type: 'risk' }
+  { label: '风险', type: 'risk' },
+  { label: '公司', type: 'company' },
+  { label: '资源', type: 'resource' },
+  { label: '任务', type: 'task' }
 ];
 
 function nodeById(id) {
@@ -923,14 +969,15 @@ async function loadBackendData() {
     await fetchHealth();
     backendOnline.value = true;
 
-    const [dashboard, remoteKnowledge, remoteJobs, remoteGraph, remoteModelConfig, remoteWikiPages, remoteWikiLogs] = await Promise.all([
+    const [dashboard, remoteKnowledge, remoteJobs, remoteGraph, remoteModelConfig, remoteGraphConfig, remoteWikiPages, remoteWikiLogs] = await Promise.all([
       fetchDashboard(),
       fetchKnowledgeItems(),
       fetchJobs(),
-      fetchGraph(),
+      fetchGraph().catch(() => ({ nodes: [], edges: [], source: 'sqlite' })),
       fetchModelConfig(),
-      fetchWikiPages(),
-      fetchWikiLogs()
+      fetchGraphConfig().catch(() => graphConfig.value),
+      fetchWikiPages().catch(() => []),
+      fetchWikiLogs().catch(() => [])
     ]);
 
     metrics.value = dashboard.metrics || fallbackMetrics;
@@ -942,7 +989,9 @@ async function loadBackendData() {
     graphNodes.value = remoteGraph.nodes?.length ? remoteGraph.nodes : fallbackGraphNodes;
     graphEdges.value = remoteGraph.edges?.length ? remoteGraph.edges : fallbackGraphEdges;
     selectedNode.value = graphNodes.value[1] || graphNodes.value[0];
-    selectedEdge.value = graphEdges.value[0];
+    selectedEdge.value = graphEdges.value[0] || {};
+    graphSource.value = remoteGraph.source || 'sqlite';
+    graphConfig.value = remoteGraphConfig;
     modelConfig.value = remoteModelConfig;
     wikiPages.value = remoteWikiPages || [];
     selectedWikiPage.value = wikiPages.value[0] || null;
@@ -1000,8 +1049,79 @@ async function refreshGraph() {
   const remoteGraph = await fetchGraph();
   graphNodes.value = remoteGraph.nodes?.length ? remoteGraph.nodes : graphNodes.value;
   graphEdges.value = remoteGraph.edges?.length ? remoteGraph.edges : graphEdges.value;
+  graphSource.value = remoteGraph.source || graphSource.value;
   selectedNode.value = graphNodes.value.find((node) => node.id === selectedNode.value?.id) || graphNodes.value[0];
-  selectedEdge.value = graphEdges.value.find((edge) => edge.id === selectedEdge.value?.id) || graphEdges.value[0];
+  selectedEdge.value = graphEdges.value.find((edge) => edge.id === selectedEdge.value?.id) || graphEdges.value[0] || {};
+}
+
+async function saveGraphSettings() {
+  if (!backendOnline.value) {
+    graphMessage.value = '后端服务离线，无法保存 Neo4j 配置';
+    return;
+  }
+  try {
+    graphMessage.value = '正在保存 Neo4j 配置...';
+    graphConfig.value = await saveGraphConfig(graphConfig.value);
+    graphMessage.value = 'Neo4j 配置已保存';
+    await refreshGraph();
+  } catch (error) {
+    graphMessage.value = `保存失败：${error.message}`;
+  }
+}
+
+async function testGraphSettings() {
+  if (!backendOnline.value) {
+    graphMessage.value = '后端服务离线，无法测试 Neo4j';
+    return;
+  }
+  try {
+    graphMessage.value = '正在测试 Neo4j 连接...';
+    const result = await testGraphConfig();
+    graphMessage.value = result.message || (result.ok ? 'Neo4j 连接正常' : 'Neo4j 连接失败');
+  } catch (error) {
+    graphMessage.value = `测试失败：${error.message}`;
+  }
+}
+
+async function extractSelectedGraphItem() {
+  if (!backendOnline.value) {
+    graphMessage.value = '后端服务离线，无法抽取图谱';
+    return;
+  }
+  if (!graphExtractItemId.value) {
+    graphMessage.value = '请先输入知识 item_id';
+    return;
+  }
+  try {
+    graphMessage.value = '正在抽取实体关系...';
+    const result = await extractGraphItem(graphExtractItemId.value);
+    graphMessage.value = result.ok ? `写入 ${result.written.entities} 个实体、${result.written.relations} 条关系。` : (result.message || '图谱抽取失败');
+    await refreshGraph();
+  } catch (error) {
+    graphMessage.value = `抽取失败：${error.message}`;
+  }
+}
+
+async function confirmSelectedGraphEdge() {
+  if (!backendOnline.value || !selectedEdge.value?.id) return;
+  try {
+    const result = await confirmGraphRelation(selectedEdge.value.id);
+    graphMessage.value = result.ok ? '关系已确认' : (result.message || '确认失败');
+    await refreshGraph();
+  } catch (error) {
+    graphMessage.value = `确认失败：${error.message}`;
+  }
+}
+
+async function deleteSelectedGraphEdge() {
+  if (!backendOnline.value || !selectedEdge.value?.id) return;
+  try {
+    const result = await deleteGraphRelation(selectedEdge.value.id);
+    graphMessage.value = result.ok ? '关系已删除' : (result.message || '删除失败');
+    await refreshGraph();
+  } catch (error) {
+    graphMessage.value = `删除失败：${error.message}`;
+  }
 }
 
 async function refreshModelConfig() {

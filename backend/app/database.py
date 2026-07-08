@@ -71,6 +71,15 @@ def init_db():
                 label TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS graph_config (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                enabled INTEGER NOT NULL DEFAULT 0,
+                uri TEXT NOT NULL DEFAULT 'bolt://localhost:7687',
+                username TEXT NOT NULL DEFAULT 'neo4j',
+                password TEXT NOT NULL DEFAULT '',
+                database TEXT NOT NULL DEFAULT 'neo4j'
+            );
+
             CREATE TABLE IF NOT EXISTS wiki_pages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 slug TEXT NOT NULL UNIQUE,
@@ -149,6 +158,18 @@ def init_db():
         ensure_column(conn, "wiki_pages", "source_item_ids_json", "TEXT NOT NULL DEFAULT '[]'")
         ensure_column(conn, "wiki_pages", "tags_json", "TEXT NOT NULL DEFAULT '[]'")
         ensure_column(conn, "wiki_pages", "status", "TEXT NOT NULL DEFAULT 'published'")
+        ensure_column(conn, "graph_config", "enabled", "INTEGER NOT NULL DEFAULT 0")
+        ensure_column(conn, "graph_config", "uri", "TEXT NOT NULL DEFAULT 'bolt://localhost:7687'")
+        ensure_column(conn, "graph_config", "username", "TEXT NOT NULL DEFAULT 'neo4j'")
+        ensure_column(conn, "graph_config", "password", "TEXT NOT NULL DEFAULT ''")
+        ensure_column(conn, "graph_config", "database", "TEXT NOT NULL DEFAULT 'neo4j'")
+        conn.execute(
+            """
+            INSERT INTO graph_config (id, enabled, uri, username, password, database)
+            VALUES (1, 0, 'bolt://localhost:7687', 'neo4j', '', 'neo4j')
+            ON CONFLICT(id) DO NOTHING
+            """
+        )
         seed_if_empty(conn)
 
 

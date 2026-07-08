@@ -10,6 +10,17 @@ from pydantic import BaseModel, Field
 from .database import DATA_DIR, get_connection, init_db, parse_json
 from .document_parser import ParseError, SUPPORTED_SUFFIXES, parse_document, split_chunks
 from .logging_config import configure_logging
+from .graph_extractor import extract_graph_candidates
+from .neo4j_graph import (
+    GraphStoreError,
+    confirm_relation,
+    delete_relation,
+    get_graph_config,
+    list_graph,
+    save_graph_config,
+    test_graph_connection,
+    upsert_candidates,
+)
 from .wiki_compiler import WikiCompileError, compile_knowledge_item_to_wiki
 from .wiki_repository import get_wiki_page, list_compile_logs, list_wiki_pages
 from .vector_store import (
@@ -81,6 +92,14 @@ class VectorSearchRequest(BaseModel):
     top_k: int = Field(default=5, alias="topK")
 
     model_config = {"populate_by_name": True}
+
+
+class GraphConfigRequest(BaseModel):
+    enabled: bool = False
+    uri: str = "bolt://localhost:7687"
+    username: str = "neo4j"
+    password: str = ""
+    database: str = "neo4j"
 
 
 class ModelConfigRequest(BaseModel):
@@ -420,19 +439,65 @@ def list_jobs():
 
 @app.get("/api/graph")
 def graph():
-    with get_connection() as conn:
-        nodes = conn.execute("SELECT id, label, type_key, x, y FROM graph_nodes").fetchall()
-        edges = conn.execute("SELECT id, from_node, to_node, status, label FROM graph_edges").fetchall()
-    return {
-        "nodes": [
-            {"id": row["id"], "label": row["label"], "typeKey": row["type_key"], "x": row["x"], "y": row["y"]}
-            for row in nodes
-        ],
-        "edges": [
-            {"id": row["id"], "from": row["from_node"], "to": row["to_node"], "status": row["status"], "label": row["label"]}
-            for row in edges
-        ],
-    }
+    return list_graph(get_graph_config())
+
+
+@app.get("/api/graph/config")
+def graph_config():
+    config = get_graph_config()
+    return {**config, "password": ""}
+
+
+@app.post("/api/graph/config")
+def save_graph_settings(request: GraphConfigRequest):
+    current = get_graph_config()
+    payload = request.model_dump()
+    if not payload.get("password"):
+        payload["password"] = current.get("password", "")
+    saved = save_graph_config(payload)
+    return {**saved, "password": ""}
+
+
+@app.post("/api/graph/test")
+def test_graph_settings():
+    return test_graph_connection(get_graph_config())
+
+
+@app.post("/api/graph/extract/{item_id}")
+def extract_graph_item(item_id: int):
+    item = get_knowledge_item_for_service(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Knowledge item not found")
+    config = get_graph_config()
+    if not config.get("enabled"):
+        return {"ok": False, "message": "Neo4j 图谱未启用，请先保存配置并启用。"}
+    try:
+        candidates = extract_graph_candidates(item, get_model_config())
+        written = upsert_candidates(candidates, item, config)
+    except GraphStoreError as exc:
+        return {"ok": False, "message": str(exc)}
+    except Exception as exc:
+        logger.exception("图谱抽取写入失败，item_id：%s", item_id)
+        return {"ok": False, "message": "图谱抽取写入失败：{}".format(exc)}
+    return {"ok": True, "itemId": item_id, "candidates": candidates, "written": written}
+
+
+@app.post("/api/graph/relations/{edge_id}/confirm")
+def confirm_graph_relation(edge_id: str):
+    try:
+        return confirm_relation(edge_id, get_graph_config())
+    except Exception as exc:
+        logger.exception("确认图谱关系失败，edge_id：%s", edge_id)
+        return {"ok": False, "message": str(exc)}
+
+
+@app.delete("/api/graph/relations/{edge_id}")
+def remove_graph_relation(edge_id: str):
+    try:
+        return delete_relation(edge_id, get_graph_config())
+    except Exception as exc:
+        logger.exception("删除图谱关系失败，edge_id：%s", edge_id)
+        return {"ok": False, "message": str(exc)}
 
 
 @app.post("/api/context/generate")
